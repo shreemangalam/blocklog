@@ -12,6 +12,7 @@ AGENTS.md
 .claude/
 .codex/
 docs/private/
+docs/public/
 
 # Local configuration and generated runtime data
 .env.*

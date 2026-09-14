@@ -10,8 +10,6 @@ Design and repository skeleton, reviewed on 2026-09-12. The engine, API, fronten
 
 - [Functional design](docs/public/functional-design.md): scope, user journeys, API behavior, acceptance criteria.
 - [Technical design](docs/public/technical-design.md): storage, concurrency, recovery, resource limits, and LLM-assisted query translation.
-- [Testing evidence](docs/public/testing-evidence.md): correctness matrix and reproducible measurement protocol.
-- [Interview questions](docs/public/interview-questions.md): design tradeoffs and evidence requirements.
 
 ## Repository layout
 
