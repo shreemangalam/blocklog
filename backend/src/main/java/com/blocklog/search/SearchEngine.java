@@ -21,11 +21,13 @@ public class SearchEngine {
     private final BlockCatalog catalog;
     private final Semaphore scanPermits;
     private final Semaphore queryPermits;
+    private final int maxActiveQueries;
 
     public SearchEngine(BlockCatalog catalog, int scanPermitCount, int maxActiveQueries) {
         this.catalog = catalog;
         this.scanPermits = new Semaphore(scanPermitCount);
         this.queryPermits = new Semaphore(maxActiveQueries);
+        this.maxActiveQueries = maxActiveQueries;
     }
 
     public SearchResponse search(String tenantId, long fromMs, long toMs,
@@ -163,10 +165,7 @@ public class SearchEngine {
     }
 
     public int getActiveQueries() {
-        return queryPermits.availablePermits() >= 0
-                ? (queryPermits.availablePermits() == queryPermits.availablePermits()
-                ? 0 : 0)
-                : 0;
+        return maxActiveQueries - queryPermits.availablePermits();
     }
 
     private SearchResponse emptyResult(int candidates, int scanned, int skipped, int unavailable,
