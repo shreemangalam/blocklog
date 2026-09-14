@@ -1,0 +1,21 @@
+# Standard ignores
+target/
+node_modules/
+.next/
+*.log
+*.zip
+.env
+
+# Local instructions and private working notes
+CLAUDE.md
+AGENTS.md
+.claude/
+.codex/
+docs/private/
+
+# Local configuration and generated runtime data
+.env.*
+!.env.example
+data/
+artifacts/
+*.tsbuildinfo

@@ -1,0 +1,31 @@
+server:
+  port: 8080
+
+blocklog:
+  data-dir: ./data
+  max-batch-records: 1000
+  max-batch-bytes: 5000000
+  max-record-bytes: 65536
+  max-tags-per-record: 16
+  max-tag-key-bytes: 256
+  max-tag-value-bytes: 256
+  max-tenant-bytes: 256
+  flush-size-bytes: 5000000
+  flush-age-seconds: 5
+  max-blocks: 10000
+  max-query-results: 1000
+  default-query-results: 100
+  max-query-timeout-ms: 30000
+  default-query-timeout-ms: 5000
+  scan-permits: 0  # 0 = max(1, availableProcessors - 1)
+  max-active-queries: 4
+
+spring:
+  jackson:
+    default-property-inclusion: non_null
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics,prometheus
