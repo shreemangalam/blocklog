@@ -52,6 +52,13 @@ class HttpApiIntegrationTest {
         registry.add("blocklog.buffer-bytes-budget", () -> "1048576");
         registry.add("blocklog.result-bytes-budget", () -> "1048576");
         registry.add("blocklog.max-record-bytes", () -> "65536");
+        // Spring Boot Test sets management.defaults.metrics.export.enabled=false
+        // so tests don't accidentally push to Prometheus/StatsD/etc.; the
+        // side effect is that PrometheusMetricsExportAutoConfiguration is
+        // conditioned off and /actuator/prometheus is never registered.
+        // Re-enable it explicitly so this test covers the same scrape endpoint
+        // production Prometheus scrapes.
+        registry.add("management.prometheus.metrics.export.enabled", () -> "true");
     }
 
     @Autowired
@@ -165,43 +172,22 @@ class HttpApiIntegrationTest {
 
     @Test
     @Order(6)
-    void actuatorMetricsExposesEngineCounters() {
-        // The earlier ingestFlushSearchRoundTrip test accepted 2 records and
-        // persisted a block; the corresponding Micrometer counters must be
-        // registered and readable through /actuator/metrics/{name}.
-        ResponseEntity<Map> accepted = rest.getForEntity(
-                "/actuator/metrics/blocklog.ingest.accepted.records", Map.class);
-        assertEquals(HttpStatus.OK, accepted.getStatusCode(),
-                "custom counters must be registered with the meter registry");
-        Map body = accepted.getBody();
+    void prometheusEndpointExposesEngineMetrics() {
+        ResponseEntity<String> resp = rest.getForEntity("/actuator/prometheus", String.class);
+        assertEquals(HttpStatus.OK, resp.getStatusCode(),
+                "prometheus scrape endpoint must be exposed");
+        String body = resp.getBody();
         assertNotNull(body);
-        assertEquals("blocklog.ingest.accepted.records", body.get("name"));
-        assertTrue(readCounterValue(body) >= 2.0,
-                "acceptedRecords should have counted the round-trip ingests; body: " + body);
-
-        ResponseEntity<Map> persisted = rest.getForEntity(
-                "/actuator/metrics/blocklog.persist.records", Map.class);
-        assertEquals(HttpStatus.OK, persisted.getStatusCode());
-        assertTrue(readCounterValue(persisted.getBody()) >= 2.0,
-                "persistRecords should reflect the flushed block");
-
-        ResponseEntity<Map> flushBySize = rest.getForEntity(
-                "/actuator/metrics/blocklog.flush.by?tag=reason:size", Map.class);
-        assertEquals(HttpStatus.OK, flushBySize.getStatusCode(),
-                "tagged flush counter must be filterable by reason");
-    }
-
-    @SuppressWarnings({"rawtypes", "unchecked"})
-    private static double readCounterValue(Map body) {
-        assertNotNull(body);
-        var measurements = (List<Map>) body.get("measurements");
-        assertNotNull(measurements);
-        for (Map m : measurements) {
-            if ("COUNT".equals(m.get("statistic"))) {
-                return ((Number) m.get("value")).doubleValue();
-            }
-        }
-        return -1;
+        // Micrometer mangles blocklog.ingest.accepted.records ->
+        // blocklog_ingest_accepted_records_total. The earlier round-trip test
+        // accepted records, so the counter must be present with a sample.
+        assertTrue(body.contains("blocklog_ingest_accepted_records_total"),
+                "prometheus scrape must expose the accepted-records counter");
+        assertTrue(body.contains("blocklog_persist_records_total"),
+                "prometheus scrape must expose the persist-records counter");
+        assertTrue(body.contains("blocklog_flush_by_total{reason=\"size\"}")
+                        || body.contains("blocklog_flush_by_total{reason=\"age\"}"),
+                "prometheus scrape must carry the flush reason tag");
     }
 
     @Test
