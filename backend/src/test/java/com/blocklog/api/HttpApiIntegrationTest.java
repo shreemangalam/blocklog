@@ -165,6 +165,47 @@ class HttpApiIntegrationTest {
 
     @Test
     @Order(6)
+    void actuatorMetricsExposesEngineCounters() {
+        // The earlier ingestFlushSearchRoundTrip test accepted 2 records and
+        // persisted a block; the corresponding Micrometer counters must be
+        // registered and readable through /actuator/metrics/{name}.
+        ResponseEntity<Map> accepted = rest.getForEntity(
+                "/actuator/metrics/blocklog.ingest.accepted.records", Map.class);
+        assertEquals(HttpStatus.OK, accepted.getStatusCode(),
+                "custom counters must be registered with the meter registry");
+        Map body = accepted.getBody();
+        assertNotNull(body);
+        assertEquals("blocklog.ingest.accepted.records", body.get("name"));
+        assertTrue(readCounterValue(body) >= 2.0,
+                "acceptedRecords should have counted the round-trip ingests; body: " + body);
+
+        ResponseEntity<Map> persisted = rest.getForEntity(
+                "/actuator/metrics/blocklog.persist.records", Map.class);
+        assertEquals(HttpStatus.OK, persisted.getStatusCode());
+        assertTrue(readCounterValue(persisted.getBody()) >= 2.0,
+                "persistRecords should reflect the flushed block");
+
+        ResponseEntity<Map> flushBySize = rest.getForEntity(
+                "/actuator/metrics/blocklog.flush.by?tag=reason:size", Map.class);
+        assertEquals(HttpStatus.OK, flushBySize.getStatusCode(),
+                "tagged flush counter must be filterable by reason");
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private static double readCounterValue(Map body) {
+        assertNotNull(body);
+        var measurements = (List<Map>) body.get("measurements");
+        assertNotNull(measurements);
+        for (Map m : measurements) {
+            if ("COUNT".equals(m.get("statistic"))) {
+                return ((Number) m.get("value")).doubleValue();
+            }
+        }
+        return -1;
+    }
+
+    @Test
+    @Order(7)
     void searchWithWrongTenantReturnsEmpty() {
         SearchRequest search = new SearchRequest(
                 "other-tenant",
