@@ -162,12 +162,17 @@ public class SearchEngine {
                                    long fromMs, long toMs,
                                    Map<String, String> tags, String text,
                                    long deadlineNanos) {
+        long permitWaitNanos = deadlineNanos - System.nanoTime();
+        if (permitWaitNanos <= 0) return ScanOutcome.asTimedOut();
+
+        boolean acquired;
         try {
-            scanPermits.acquire();
+            acquired = scanPermits.tryAcquire(permitWaitNanos, TimeUnit.NANOSECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return ScanOutcome.asTimedOut();
         }
+        if (!acquired) return ScanOutcome.asTimedOut();
         metrics.setScanPermitsFree(scanPermits.availablePermits());
 
         try {

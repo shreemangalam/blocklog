@@ -114,6 +114,31 @@ class SearchEngineTest {
     }
 
     @Test
+    void queryReturnsTimedOutInsteadOfBlockingUnderScanPermitStarvation() throws Exception {
+        catalog = new BlockCatalog(10_000);
+        Path file = BlockWriter.writeBlock(tempDir, "tenant-a",
+                List.of(new LogRecord(1000L, Map.of(), "hello world")),
+                "block-1");
+        catalog.register(BlockMetadata.fromHeader("block-1", file, BlockReader.readHeader(file)));
+
+        // scanPermits = 0 -> every scan permit acquire must fail after its deadline.
+        // Without the deadline-bounded tryAcquire this call would block indefinitely.
+        SearchEngine engine = new SearchEngine(catalog, 0, 4, newMetrics());
+
+        long timeoutMs = 300;
+        long startNanos = System.nanoTime();
+        SearchResponse response = engine.search(
+                "tenant-a", 0, 10_000, null, null, 100, timeoutMs);
+        long elapsedMs = (System.nanoTime() - startNanos) / 1_000_000L;
+
+        assertTrue(response.timed_out(), "search must flag timed_out when no scan permit is ever available");
+        assertTrue(response.partial(), "response must be partial when timed_out");
+        assertEquals(0, response.returned_count());
+        assertTrue(elapsedMs < timeoutMs + 500,
+                "search must return near the deadline, not block; took " + elapsedMs + "ms");
+    }
+
+    @Test
     void tenantAndTimePruningAreExact() throws Exception {
         catalog = new BlockCatalog(10_000);
 
