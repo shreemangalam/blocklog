@@ -1,6 +1,8 @@
 package com.blocklog.api;
 
 import com.blocklog.ingest.IngestionEngine;
+import com.blocklog.ingest.IngestionOverloadException;
+import com.blocklog.ingest.IngestionUnavailableException;
 import com.blocklog.model.*;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -39,21 +41,20 @@ public class LogController {
                 Map<String, String> tags = input.tags() != null ? input.tags() : Map.of();
                 records.add(new LogRecord(timestamp, tags, input.message()));
             } catch (DateTimeParseException e) {
-                return ResponseEntity.badRequest().body(Map.of("error", "Invalid timestamp: " + input.timestamp()));
+                return ResponseEntity.badRequest()
+                        .body(Map.of("error", "Invalid timestamp: " + input.timestamp()));
             }
         }
 
         try {
             int accepted = ingestionEngine.ingest(request.tenant_id(), records);
             return ResponseEntity.status(HttpStatus.ACCEPTED).body(IngestResponse.buffered(accepted));
-        } catch (IllegalStateException e) {
-            if (e.getMessage().contains("full")) {
-                return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(Map.of("error", e.getMessage()));
-            }
-            if (e.getMessage().contains("unhealthy")) {
-                return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(Map.of("error", e.getMessage()));
-            }
-            return ResponseEntity.status(429).body(Map.of("error", e.getMessage()));
+        } catch (IngestionOverloadException e) {
+            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                    .body(Map.of("error", e.getMessage()));
+        } catch (IngestionUnavailableException e) {
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                    .body(Map.of("error", e.getMessage()));
         }
     }
 

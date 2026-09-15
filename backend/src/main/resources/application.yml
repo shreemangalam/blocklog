@@ -17,8 +17,12 @@ blocklog:
   default-query-results: 100
   max-query-timeout-ms: 30000
   default-query-timeout-ms: 5000
-  scan-permits: 0  # 0 = max(1, availableProcessors - 1)
+  scan-permits: 0            # 0 = max(1, availableProcessors - 1)
   max-active-queries: 4
+  queue-bytes-budget: 67108864   # 64 MiB queued encoded records
+  buffer-bytes-budget: 67108864  # 64 MiB active per-tenant buffers
+  result-bytes-budget: 67108864  # 64 MiB retained global results
+  shutdown-deadline-seconds: 10
 
 spring:
   jackson:
@@ -28,4 +32,8 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,metrics,prometheus
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true

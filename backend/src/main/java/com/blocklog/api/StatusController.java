@@ -24,6 +24,9 @@ public class StatusController {
 
     @GetMapping("/status")
     public StatusResponse status() {
+        double pressurePct = Math.max(
+                ingestionEngine.getBufferUsagePct(),
+                ingestionEngine.getQueueUsagePct());
         return new StatusResponse(
                 ingestionEngine.isPersistenceHealthy() ? "healthy" : "degraded",
                 ingestionEngine.getAcceptedRecords(),
@@ -33,7 +36,7 @@ public class StatusController {
                 catalog.size(),
                 catalog.unavailableCount(),
                 searchEngine.getActiveQueries(),
-                ingestionEngine.getBufferUsagePct(),
+                pressurePct,
                 ingestionEngine.isPersistenceHealthy()
         );
     }
