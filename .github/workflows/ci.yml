@@ -27,11 +27,13 @@ jobs:
           java-version: 21
           cache: maven
 
+      # Use the ubuntu-latest preinstalled mvn instead of the Windows-only
+      # mvnw.cmd bundled with this repo. Local Windows dev still uses mvnw.cmd.
       - name: Compile
-        run: ./mvnw -B -ntp compile
+        run: mvn -B -ntp compile
 
       - name: Test
-        run: ./mvnw -B -ntp test
+        run: mvn -B -ntp test
 
       - name: Upload Surefire reports on failure
         if: failure()
@@ -60,9 +62,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Type-check
-        run: npx tsc --noEmit
-
+      # Next 16 generates LayoutProps<"/"> and other page types into
+      # .next/types during `next build`, so tsc must run AFTER build (or as
+      # part of it). `next build` already runs the same TypeScript check, so
+      # we let it do double duty instead of adding a separate tsc step.
       - name: Build
         env:
           # NL search is inert without a key; build must succeed regardless.
