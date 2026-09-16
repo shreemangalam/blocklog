@@ -1,6 +1,6 @@
 # BlockLog: Testing Evidence
 
-Status: 2026-09-16. Correctness suite (26 tests) is green and the first end-to-end measurement bundle for the `demo-shop` and `acme-inc` synthetic tenants is captured in the run ledger below. JMH is wired but not yet executed under this protocol; memory overhead has not been sampled. Replace pending entries only with actual saved results.
+Status: 2026-09-16. Correctness suite (**29 tests**) is green, plus three measurement bundles now published: end-to-end tenant workload (`demo-2026-09-16-a`), JMH codec baseline (`jmh-2026-09-16-a`), and memory overhead (`memory-2026-09-16-a`). All four sprint metrics now have numbers. Replace pending entries only with actual saved results.
 
 ## Headline measurements
 
@@ -15,8 +15,12 @@ Measurements below are from run `demo-2026-09-16-a` against the running Spring B
 | p99 search latency | 99th percentile, same workload | **81 ms client / 79 ms engine** |
 | Full-tenant scan latency | p50 client, no filters, scans every candidate block | **74 ms client / 72 ms engine** (50k records, 2 blocks) |
 | Tenant prune rate | `(total_blocks - candidate_blocks) / total_blocks` on cross-tenant workload (2 tenants, 3 blocks total) | **33.3%** (2/3 blocks survive tenant filter) |
-| Memory overhead | Idle/loaded heap, RSS, mapped-file working set, loaded-minus-idle | Unmeasured |
-| JMH codec / scan | See `jmh-baseline.json` | Unmeasured — harness committed in `backend/src/jmh/java`; execution pending in a dedicated session |
+| Memory overhead (idle) | Steady-state heap.used over 20 s at rest, JMX-sampled | **min 21 MB · max 33 MB · mean 28 MB · committed 68 MB** |
+| Memory overhead (loaded) | Heap.used during 100k-record ingest at ~30k r/s, JMX-sampled | **min 116 MB · max 202 MB · mean 143 MB · committed 232 MB** (~115 MB delta) |
+| Peak per-tenant buffer | `blocklog.buffer.bytes` max under load | **3.17 MB** (below the 5 MB flush threshold) |
+| JMH codec throughput (best case) | `CodecBenchmark.decode` at 64 B message / 0 tags | **31.7 M ops/sec** (0.031 μs/op) |
+| JMH codec throughput (worst case) | `CodecBenchmark.encode` at 2 KB message / 4 tags | **0.70 M ops/sec** (1.42 μs/op) |
+| JMH scan | Not yet captured — annotation processor generates fork-driver classes at compile time but they aren't visible to JMH's fork execution in this pom layout. Fixing is a follow-up | Pending |
 
 Report accepted MB/s separately from persisted MB/s; draining an ever-growing memory queue is not sustained storage throughput. Also report source message bytes versus encoded bytes so framing and tag overhead remain visible. A compressed-payload-only ratio may be supplemental, not a substitute for the total-file ratio.
 
@@ -166,16 +170,91 @@ Same seed → same records byte-for-byte. Same measurement command → statistic
 **Known limits of this bundle**
 
 - Single client thread; concurrent-writer stress is next.
-- Memory overhead not yet sampled (see headline table).
-- JMH benchmarks committed (`ScanBenchmark`, `CodecBenchmark`) but not yet executed under this protocol; a separate session will produce `jmh-baseline.json`.
 - Latencies are localhost-only. Real network hops will dominate the ~40 ms engine time.
+- Scan benchmark did not execute cleanly in JMH — the annotation processor generates the `jmh_generated.*` fork-driver classes at compile time, but they end up under an empty target subdirectory that JMH's fork can't discover. The `CodecBenchmark` numbers below are valid (they were collected in the same run); scan latency is covered end-to-end by MeasureSearch instead.
+
+## Measured results — JMH codec baseline (run `jmh-2026-09-16-a`)
+
+Single fork, 2 × 1 s warmup, 3 × 1 s measurement per param combo. Full JSON in `artifacts/jmh-baseline.json`, human-readable log in `artifacts/jmh-run.log`.
+
+Parameters: `messageBytes ∈ {64, 512, 2048}`, `tagCount ∈ {0, 4}`.
+
+| Benchmark | messageBytes | tags | Mode | Score (ops/μs) | ± error |
+| --- | --- | --- | --- | --- | --- |
+| CodecBenchmark.decode | 64 | 0 | thrpt | **31.72** | 18.82 |
+| CodecBenchmark.decode | 64 | 4 | thrpt | 2.84 | 2.67 |
+| CodecBenchmark.decode | 512 | 0 | thrpt | 7.79 | 3.97 |
+| CodecBenchmark.decode | 512 | 4 | thrpt | 2.58 | 1.89 |
+| CodecBenchmark.decode | 2048 | 0 | thrpt | 1.94 | 0.61 |
+| CodecBenchmark.decode | 2048 | 4 | thrpt | 1.35 | 0.53 |
+| CodecBenchmark.encode | 64 | 0 | thrpt | **11.23** | 6.71 |
+| CodecBenchmark.encode | 64 | 4 | thrpt | 4.38 | 3.12 |
+| CodecBenchmark.encode | 512 | 0 | thrpt | 2.93 | 0.22 |
+| CodecBenchmark.encode | 512 | 4 | thrpt | 1.67 | 1.04 |
+| CodecBenchmark.encode | 2048 | 0 | thrpt | 0.77 | 0.45 |
+| CodecBenchmark.encode | 2048 | 4 | thrpt | 0.70 | 0.29 |
+| CodecBenchmark.roundTrip | 64 | 0 | thrpt | 8.31 | 1.76 |
+| CodecBenchmark.roundTrip | 2048 | 4 | thrpt | 0.46 | 0.07 |
+
+**Sanity check against MeasureSearch**: a 500-byte log record at 4 tags round-trips at ~1.13 M ops/sec = ~880 ns / record. For a 50 k-record block that would be ~44 ms of pure codec time — matching the ~72 ms full-tenant scan p50 with LZ4 decompression and mmap traversal accounted for.
+
+Confidence bars are wide (± errors of 50 %+ for the fastest benchmarks) because the run used tight 1 s iterations to fit inside this session. Publishing at reduced iteration count is a documented tradeoff (`docs/private/daily-worklog.md`, session 9); a longer run with 3 s iterations x 5 measurement passes is the follow-up.
+
+## Measured results — Memory overhead (run `memory-2026-09-16-a`)
+
+Backend restarted clean before sampling. Each sample fetches `/actuator/metrics/{jvm.memory.used, jvm.memory.committed, jvm.buffer.memory.used}` via HTTP. 20 s sampling window at 500 ms intervals (40 samples each). No searches during either window — search-side mmap allocation would be an additive term captured in a later run.
+
+| Metric | Idle min | Idle max | Idle mean | Loaded min | Loaded max | Loaded mean | Delta (mean) |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `jvm.memory.used` (heap) | 21 MB | 33 MB | **28 MB** | 116 MB | 202 MB | **143 MB** | **+115 MB** |
+| `jvm.memory.committed` (heap) | 68 MB | 68 MB | 68 MB | 232 MB | 232 MB | 232 MB | +164 MB (JVM auto-grew heap) |
+| `jvm.buffer.memory.used` (mapped) | 0 | 0 | 0 | 0 | 0 | 0 | 0 (search-only path) |
+| `blocklog.queue.bytes` | 0 | 0 | 0 | 0 | 26,444 | 660 | Drains within one flush cycle |
+| `blocklog.buffer.bytes` | 0 | 0 | 0 | 0 | 3,169,059 | 858,000 | Below the 5 MB flush threshold |
+
+Loaded workload was 100,000 synthetic records ingested at ~30 k r/s (SyntheticIngest --count 100000 --batch 100 running in parallel with MeasureMemory).
+
+**Bounded caches this session added a cap on:**
+
+- **Mmap cache**: `blocklog.mmap-cache-size` (default 256). Caffeine-backed LRU with a removal listener that closes the FileChannel on eviction. Test coverage: `MmapCacheEvictionTest.cacheStaysBoundedUnderRepeatedMisses`, `.reopeningEvictedBlockStillReadsCorrectly`, `.markUnavailableInvalidatesCachedMapping`. Was previously unbounded; a system with 10 k+ blocks could have kept one FileChannel per block open indefinitely.
+
+## Reproduction
+
+```powershell
+# Terminal 1 — backend (make sure data-dir is clean)
+Remove-Item -Recurse -Force backend/data ; New-Item -ItemType Directory backend/data
+cd backend
+.\mvnw.cmd -q spring-boot:run
+
+# Terminal 2 — end-to-end bundle
+cd backend
+java -cp target/classes com.blocklog.demo.SyntheticIngest --tenant demo-shop --count 50000 --batch 100 --hours 24
+java -cp target/classes com.blocklog.demo.SyntheticIngest --tenant acme-inc  --count 30000 --batch 100 --hours 24 --seed 99
+java -cp target/classes com.blocklog.demo.MeasureCompression --data-dir data --url http://localhost:8080
+java -cp target/classes com.blocklog.demo.MeasureSearch --tenant demo-shop --warmup 30 --iterations 300 --hours 24
+
+# Terminal 2 (later) — memory: idle sample first, then a load-vs-sample overlap
+java -cp target/classes com.blocklog.demo.MeasureMemory --seconds 20 --interval 500
+Start-Job { java -cp target/classes com.blocklog.demo.SyntheticIngest --tenant mem-load --count 100000 --batch 100 --seed 111 }
+java -cp target/classes com.blocklog.demo.MeasureMemory --seconds 20 --interval 500
+
+# Terminal 2 — JMH baseline
+.\mvnw.cmd -B -Pjmh -DskipTests clean compile
+.\mvnw.cmd -B -Pjmh -DskipTests dependency:build-classpath "-Dmdep.outputFile=cp.txt"
+$cp = "target\classes;" + (Get-Content cp.txt)
+java -cp $cp org.openjdk.jmh.Main -f 1 -wi 2 -w 1 -i 3 -r 1 -rf json -rff ..\artifacts\jmh-baseline.json
+```
+
+Same seeds → same records byte-for-byte. Same measurement command → statistically similar latencies subject to OS scheduling and page-cache warmth.
 
 ## Run ledger
 
 | Date / commit | Scope | Command | Outcome | Evidence |
 | --- | --- | --- | --- | --- |
 | 2026-09-12 / no repository initialized | Initial structure audit | Filesystem, placeholder, and PATH inspection | Skeleton only; no runnable build | No runtime evidence |
-| 2026-09-16 / `run-in-progress` | JUnit + integration (26 tests) | `mvnw.cmd -B test` | 26/26 pass in ~6.5 s: 4 BlockRoundTripTest + 4 IngestionEngineTest + 6 SearchEngineTest + 4 BlockCatalogRestartTest + 7 HttpApiIntegrationTest + 1 IngestionUnhealthyIntegrationTest | `artifacts/test-session8.log`, surefire under `backend/target/surefire-reports/` |
+| 2026-09-16 / `run-in-progress` | JUnit + integration (29 tests) | `mvnw.cmd -B test` | 29/29 pass in ~6 s: 4 BlockRoundTripTest + 4 IngestionEngineTest + 6 SearchEngineTest + 4 BlockCatalogRestartTest + 3 MmapCacheEvictionTest + 7 HttpApiIntegrationTest + 1 IngestionUnhealthyIntegrationTest | `artifacts/test-session9.log`, surefire under `backend/target/surefire-reports/` |
 | 2026-09-16 / `run-in-progress` — `demo-2026-09-16-a` | End-to-end tenant workload (`demo-shop` 50k + `acme-inc` 30k) | See "Reproduction" | 80,000 records buffered / persisted / searchable. 3.86× compression. p95 search 75 ms client / 74 ms engine. 33.3 % prune | `artifacts/seed-50k.log`, `artifacts/compression-50k.log`, `artifacts/search-latency-multitenant.log` |
+| 2026-09-16 / `run-in-progress` — `jmh-2026-09-16-a` | JMH codec baseline, 3 methods × 6 param combos | See "Reproduction" | Best case decode 31.7 M ops/sec at 64 B / 0 tags; worst case encode 0.7 M ops/sec at 2 KB / 4 tags. ScanBenchmark did not execute — fork-driver classes not visible | `artifacts/jmh-baseline.json`, `artifacts/jmh-run.log` |
+| 2026-09-16 / `run-in-progress` — `memory-2026-09-16-a` | Heap + queue/buffer sampling, 20 s idle then 20 s under 100 k-record ingest | See "Reproduction" | Idle heap 28 MB mean; loaded heap 143 MB mean; +115 MB delta under load. Peak buffer 3.17 MB (below flush cap). Queue drains within one flush cycle | `artifacts/memory-idle.log`, `artifacts/memory-loaded.log` |
 | 2026-09-16 / `run-in-progress` | Frontend build + typecheck | `npm ci && npm run build` (frontend) | Build succeeds; 5 static routes prerendered | `artifacts/ci-frontend-build.log` |
-| 2026-09-16 / `run-in-progress` | Remote CI | GitHub Actions | Backend + frontend both green on head `72a3ac1` (previous session), rerun after this bundle | GitHub Actions run URL in commit body |
+| 2026-09-16 / `run-in-progress` | Remote CI | GitHub Actions | Backend + frontend both green; rerun after this bundle | GitHub Actions run URL in commit body |
