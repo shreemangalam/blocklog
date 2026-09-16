@@ -22,6 +22,9 @@
         <lz4.version>1.8.0</lz4.version>
         <jctools.version>4.0.5</jctools.version>
         <jmh.version>1.37</jmh.version>
+        <!-- Pinned so the demo main class (com.blocklog.demo.SyntheticIngest)
+             doesn't confuse spring-boot:run's auto-detection. -->
+        <start-class>com.blocklog.BlockLogApplication</start-class>
     </properties>
 
     <dependencies>
