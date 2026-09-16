@@ -31,10 +31,11 @@ public class EngineConfiguration {
 
     @Bean
     public BlockCatalog blockCatalog(EngineConfig config) {
-        catalog = new BlockCatalog(config.maxBlocks());
+        catalog = new BlockCatalog(config.maxBlocks(), config.mmapCacheSize());
         Path dataDir = Path.of(config.dataDir());
         catalog.discoverBlocks(dataDir);
-        log.info("Catalog initialized: {} blocks, {} unavailable", catalog.size(), catalog.unavailableCount());
+        log.info("Catalog initialized: {} blocks, {} unavailable, mmap cache size {}",
+                catalog.size(), catalog.unavailableCount(), config.mmapCacheSize());
         return catalog;
     }
 

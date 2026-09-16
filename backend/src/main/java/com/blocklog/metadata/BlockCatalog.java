@@ -3,6 +3,9 @@ package com.blocklog.metadata;
 import com.blocklog.storage.BlockHeader;
 import com.blocklog.storage.BlockMapping;
 import com.blocklog.storage.BlockReader;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
+import com.github.benmanes.caffeine.cache.RemovalCause;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -19,21 +22,50 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * In-memory catalog of published blocks plus a bounded cache of read-only
- * mmap handles. Never mutates or deletes published files during a live
- * run — that means mmap handles can be reused across queries and readers
- * take independent {@code duplicate()} views.
+ * mmap handles.
+ *
+ * The mapping cache is Caffeine-backed, bounded by {@code mmapCacheSize},
+ * with a removal listener that closes the evicted {@link BlockMapping}'s
+ * FileChannel. Concurrent scanners hold {@code duplicate()} views into the
+ * MappedByteBuffer; the mapping lifetime is tied to buffer garbage
+ * collection, so closing the channel on eviction does not invalidate a
+ * duplicate that is still being read. Published block files are never
+ * mutated or deleted during a live run.
+ *
+ * The cache is a soft ceiling — Caffeine may briefly hold slightly more
+ * than {@code mmapCacheSize} while background eviction catches up. Callers
+ * must not depend on an exact upper bound.
  */
 public class BlockCatalog implements Closeable {
 
     private static final Logger log = LoggerFactory.getLogger(BlockCatalog.class);
 
+    /** Default cache size when the caller doesn't specify one. */
+    public static final int DEFAULT_MMAP_CACHE_SIZE = 256;
+
     private final Map<String, BlockMetadata> blocks = new ConcurrentHashMap<>();
-    private final Map<String, BlockMapping> mappings = new ConcurrentHashMap<>();
+    private final Cache<String, BlockMapping> mappings;
     private final AtomicInteger unavailableCount = new AtomicInteger();
     private final int maxBlocks;
 
     public BlockCatalog(int maxBlocks) {
+        this(maxBlocks, DEFAULT_MMAP_CACHE_SIZE);
+    }
+
+    public BlockCatalog(int maxBlocks, int mmapCacheSize) {
+        if (mmapCacheSize < 1) throw new IllegalArgumentException("mmapCacheSize must be >= 1");
         this.maxBlocks = maxBlocks;
+        this.mappings = Caffeine.newBuilder()
+                .maximumSize(mmapCacheSize)
+                .removalListener((String blockId, BlockMapping mapping, RemovalCause cause) -> {
+                    if (mapping == null) return;
+                    try {
+                        mapping.close();
+                    } catch (IOException e) {
+                        log.warn("Failed to close evicted mmap {} (cause={}): {}", blockId, cause, e.getMessage());
+                    }
+                })
+                .build();
     }
 
     public void register(BlockMetadata meta) {
@@ -50,24 +82,27 @@ public class BlockCatalog implements Closeable {
      * Get (or open + cache) the mmap for the given block id. Returns null when
      * mapping fails; the block is then re-tagged unavailable for future queries
      * so a transient read failure does not repeatedly retry the same file.
+     *
+     * Uses Caffeine's atomic {@code get(k, loader)} so concurrent callers on the
+     * same missing block open at most one mapping; the removal listener closes
+     * one if the load races.
      */
     public BlockMapping mappingFor(BlockMetadata meta) {
-        BlockMapping existing = mappings.get(meta.blockId());
-        if (existing != null) return existing;
-
-        try {
-            BlockMapping fresh = BlockMapping.open(meta.filePath());
-            BlockMapping prior = mappings.putIfAbsent(meta.blockId(), fresh);
-            if (prior != null) {
-                fresh.close();
-                return prior;
+        return mappings.get(meta.blockId(), id -> {
+            try {
+                return BlockMapping.open(meta.filePath());
+            } catch (IOException e) {
+                log.warn("Failed to mmap block {}: {}", id, e.getMessage());
+                markUnavailable(id);
+                return null;
             }
-            return fresh;
-        } catch (IOException e) {
-            log.warn("Failed to mmap block {}: {}", meta.blockId(), e.getMessage());
-            markUnavailable(meta.blockId());
-            return null;
-        }
+        });
+    }
+
+    /** Test hook: how many mmap handles the cache currently retains. */
+    public long cachedMappingCount() {
+        mappings.cleanUp();
+        return mappings.estimatedSize();
     }
 
     public void markUnavailable(String blockId) {
@@ -75,10 +110,8 @@ public class BlockCatalog implements Closeable {
         if (prior == null || !prior.available()) return;
         blocks.put(blockId, BlockMetadata.unavailable(blockId, prior.filePath()));
         unavailableCount.incrementAndGet();
-        BlockMapping stale = mappings.remove(blockId);
-        if (stale != null) {
-            try { stale.close(); } catch (IOException ignored) {}
-        }
+        // Invalidate triggers the removal listener which closes the mapping.
+        mappings.invalidate(blockId);
     }
 
     public int size() { return blocks.size(); }
@@ -149,10 +182,9 @@ public class BlockCatalog implements Closeable {
 
     @Override
     public void close() {
-        for (BlockMapping m : mappings.values()) {
-            try { m.close(); } catch (IOException ignored) {}
-        }
-        mappings.clear();
+        // Invalidate every entry — the removal listener closes each mapping.
+        mappings.invalidateAll();
+        mappings.cleanUp();
     }
 
     public record PruneResult(List<BlockMetadata> candidates, int prunedCount) {}

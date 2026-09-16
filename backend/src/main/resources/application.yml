@@ -23,6 +23,7 @@ blocklog:
   buffer-bytes-budget: 67108864  # 64 MiB active per-tenant buffers
   result-bytes-budget: 67108864  # 64 MiB retained global results
   shutdown-deadline-seconds: 10
+  mmap-cache-size: 256           # max mmap handles cached before LRU eviction
 
 spring:
   jackson:

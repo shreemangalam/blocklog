@@ -20,3 +20,5 @@ docs/public/
 data/
 artifacts/
 *.tsbuildinfo
+backend/dependency-reduced-pom.xml
+backend/cp.txt
