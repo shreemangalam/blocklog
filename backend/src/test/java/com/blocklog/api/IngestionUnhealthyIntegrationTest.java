@@ -52,7 +52,6 @@ class IngestionUnhealthyIntegrationTest {
         registry.add("blocklog.flush-size-bytes", () -> "40");
         registry.add("blocklog.buffer-bytes-budget", () -> "1048576");
         registry.add("blocklog.queue-bytes-budget", () -> "1048576");
-        registry.add("blocklog.result-bytes-budget", () -> "1048576");
     }
 
     @Autowired

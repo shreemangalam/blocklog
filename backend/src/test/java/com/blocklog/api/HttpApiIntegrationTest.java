@@ -50,7 +50,6 @@ class HttpApiIntegrationTest {
         registry.add("blocklog.flush-size-bytes", () -> "80");
         registry.add("blocklog.queue-bytes-budget", () -> "512");
         registry.add("blocklog.buffer-bytes-budget", () -> "1048576");
-        registry.add("blocklog.result-bytes-budget", () -> "1048576");
         registry.add("blocklog.max-record-bytes", () -> "65536");
         // Spring Boot Test sets management.defaults.metrics.export.enabled=false
         // so tests don't accidentally push to Prometheus/StatsD/etc.; the

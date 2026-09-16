@@ -23,7 +23,6 @@ public record EngineConfig(
         int maxActiveQueries,
         long queueBytesBudget,
         long bufferBytesBudget,
-        long resultBytesBudget,
         int shutdownDeadlineSeconds,
         int mmapCacheSize
 ) {
