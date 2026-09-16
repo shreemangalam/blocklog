@@ -44,10 +44,14 @@ export function StructuredSearchForm({ onSubmit, loading, initial }: StructuredS
     e.preventDefault();
     if (!tenantId.trim() || !from || !to) return;
 
+    // The datetime-local input yields a naive "YYYY-MM-DDTHH:MM" string.
+    // Passing that to new Date() parses it as local time, which contradicts
+    // the "(UTC)" label. Appending Z forces UTC interpretation so the
+    // number the user typed is the UTC instant we search against.
     onSubmit({
       tenant_id: tenantId.trim(),
-      from: new Date(from).toISOString(),
-      to: new Date(to).toISOString(),
+      from: new Date(from + "Z").toISOString(),
+      to: new Date(to + "Z").toISOString(),
       tags: Object.keys(tags).length > 0 ? tags : undefined,
       text: text.trim() || undefined,
       limit,
