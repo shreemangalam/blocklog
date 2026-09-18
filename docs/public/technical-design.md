@@ -1,6 +1,6 @@
 # BlockLog: Technical Design
 
-Status: proposed sprint baseline, 2026-09-12, updated 2026-09-14. No implementation has been verified. Recommendations below make the original thesis implementable within one week; the flush interpretation is explicitly unresolved.
+Status: 2026-09-18. Baseline shipped: 30 JUnit + integration tests pass, `/actuator/prometheus` is live, and the four sprint metrics have measured numbers in [testing evidence](testing-evidence.md). Flush semantics resolved. This document describes what the engine currently implements; sections that still describe design candidates are marked "proposed" explicitly.
 
 ## Architecture and ownership
 
@@ -18,36 +18,42 @@ NL query (frontend only):
   -> client-side validation -> POST /api/v1/search -> standard result render
 ```
 
-Keep the engine independent of Spring. One Maven module is enough. Suggested packages under `com.blocklog`: `model`, `ingest`, `storage`, `metadata`, `search`, `api`, and `observability`. Tests mirror packages. Put resources in `src/main/resources`, deterministic fixtures in `src/test/resources`, and JMH sources in `src/jmh/java` with an explicit Maven benchmark profile. Do not create abstraction layers without a concrete caller.
+Shipped packages under `com.blocklog`: `model`, `ingest`, `storage`, `metadata`, `search`, `api`, `observability`, plus `demo` (measurement CLIs — `SyntheticIngest`, `MeasureSearch`, `MeasureCompression`, `MeasureMemory`). Tests mirror packages. JMH sources are under `src/jmh/java`, activated by `-Pjmh`.
 
 ## Decisions and limits
 
-| Concern | Proposed baseline |
+| Concern | Shipped design |
 | --- | --- |
-| Deployment | One writer process with an exclusive data-directory lock; local filesystem |
-| Ingestion queue | Bounded, established lock-free MPSC ring implementation; choose and pin dependency on Day 1 |
-| Buffer ownership | One consumer owns mutable buffers; transfer sealed buffers to writer without concurrent reuse |
-| Block grouping | One tenant per block; min/max event time and bounded tag-pair union |
-| File unit | One immutable file per block for the sprint; larger segment files deferred |
-| Compression | Independent raw LZ4 payload with a versioned BlockLog header |
-| Durability | Buffered acknowledgement, no WAL; publication after file force |
-| Search | Virtual-thread executor with bounded submitted work, active queries, and global scan permits |
-| Result policy | Earliest K by stable order, with explicit incompleteness and truncation |
+| Deployment | One writer process; local filesystem. Directory lock is a proposed follow-up. |
+| Ingestion queue | jctools `MpscUnboundedArrayQueue` (unbounded structurally, bounded by `ByteBudget` — see below) |
+| Buffer ownership | Single consumer thread drains the queue into per-tenant `TenantBuffer` objects; no shared mutation |
+| Block grouping | One tenant per block; min/max event time and bounded tag-pair summary |
+| File unit | One immutable file per block, name `<uuid>.blk` |
+| Compression | Raw LZ4 payload with a versioned BlockLog header, CRC32 on header and payload |
+| Durability | Buffered `202 accepted`; no WAL. Publication after `FileChannel.force(true)` + atomic rename |
+| Search | Virtual-thread-per-task scan of pruned candidates; deadline in nanoseconds; bounded active queries + scan permits |
+| Backpressure | Typed `IngestionOverloadException` → HTTP 429, `IngestionUnavailableException` → HTTP 503 |
+| Result policy | Earliest K by (timestamp, block, record) order via a min-heap; `truncated=true` when `totalHitsSeen > returned` |
+| Mmap lifecycle | Caffeine LRU cache in `BlockCatalog` bounded by `mmap-cache-size` (default 256); removal listener closes the FileChannel |
 | NL search | Frontend-only LLM translation; no backend involvement; structured API is the execution path |
 
-Initial tuning proposals: 64 MiB queued encoded records, 64 MiB active buffers, 16 MiB sealed buffers, four admitted queries, scan permits `max(1, availableProcessors - 1)`, and 64 MiB retained results globally. Count retained batch payloads once and transfer byte reservations with ownership. Limit concurrent request parsing and reserve capacity before materializing large bodies. Queue slot bounds alone do not bound bytes. Reject new ingestion when the persistence backlog exhausts its budget.
+Current tuning (`application.yml`): 64 MiB queue byte budget, 64 MiB buffer byte budget, 4 admitted queries, scan permits `max(1, availableProcessors − 1)`, 256-entry mmap cache, 5 MB / 5 s flush trigger. `EngineConfig.resultBytesBudget` was declared but never enforced — removed in `57447bf` so the config doesn't lie about limits it doesn't implement. If a per-query result byte cap is wanted later, add it with actual enforcement.
+
+### ByteBudget: whole-batch reservation with ownership transfer
+
+`com.blocklog.ingest.ByteBudget` is a single-pool atomic byte reservation. HTTP threads reserve capacity on the **queue** budget for a whole batch before enqueuing; the consumer thread releases queue-budget bytes and reserves the same bytes on the **buffer** budget as it moves records into per-tenant buffers. The flush pipeline releases buffer bytes after the block is durably published. Byte reservations transfer with ownership rather than being counted independently at each stage; that's what makes the pipeline's memory footprint predictable.
+
+If either budget can't cover a batch, `ByteBudget.tryAcquire` returns false and the controller maps to HTTP 429. This replaces the earlier `IllegalStateException`-with-string-match approach with typed exceptions; the mapping is proven end-to-end by `HttpApiIntegrationTest.oversizedBatchReturns429WhenQueueBudgetExhausted` and `IngestionUnhealthyIntegrationTest.ingestReturns503AfterPersistenceFailure`.
 
 Set a finite block/catalog ceiling, initially 10,000 blocks including reserved publications, and stop ingestion before exceeding it. This is a sprint dataset ceiling, not a capacity claim. Account for catalog/tag object overhead and live mmap regions separately in evidence. Adding retention or removing this ceiling requires a new resource-lifecycle design.
 
-## Flush semantics: decision required before codec implementation
+## Flush semantics: resolved (record-aligned)
 
-Original requirement: exactly 5 MB or 5 seconds. Decimal 5 MB means 5,000,000 encoded, uncompressed record bytes. Complete variable-length records generally cannot fill that boundary exactly.
+Shipped interpretation: **5,000,000-byte target, record-aligned, flush-before-overflow, never split a record**. `TenantBuffer.wouldExceedSize(nextRecordBytes)` returns true when appending would push the buffer past the target; the flush fires before the append. Records over 64 KiB (`max-record-bytes`) are rejected at admission. Empty buffers do not generate blocks.
 
-Recommended interpretation: 5,000,000-byte maximum payload target; flush immediately on equality, or flush the current nonempty buffer before appending a record that would exceed it. Never split a record. Reject records over the 64 KiB cap. Time-flush a nonempty buffer when its oldest accepted record reaches five seconds using a monotonic clock. Queue residence counts toward age; observe deadlines even during continuous traffic. Empty buffers do not generate blocks.
+Age flush is a 1-second scheduled tick against the oldest record's `System.currentTimeMillis()`; when `now - oldestRecordEpochMs >= 5000 ms`, the buffer flushes. Queue residence counts toward age (the timestamp is set at record enqueue, not at flush time).
 
-This changes literal byte-exact filling and must be resolved before writing format fixtures. If byte-exact blocks are mandatory, specify fragmentation/reassembly or padding and its accounting instead. Do not silently implement either interpretation. Under global memory pressure, reject/backpressure additional ingestion rather than evict unflushed records. Release empty tenant buffers after publication.
-
-Inject the clock for unit tests. Triggering at five seconds does not imply the operating system will schedule or finish disk I/O at exactly that time; report trigger lag and publication latency separately.
+Triggering at 5 s does not imply the OS will finish disk I/O at 5 s. Trigger latency and publish latency are separate; the shipped `EngineMetrics.flush.duration` timer captures publish time, and the run bundle in `testing-evidence.md` reports overall throughput across a full 5-second buffer window.
 
 ## Record and block format
 
@@ -85,23 +91,31 @@ On disk-full or write failure, retain accepted buffers within their reserved bud
 
 ## Metadata pruning
 
-Maintain immutable block entries containing internal file ID, tenant, min/max timestamp, and a bounded union of exact tag pairs. Tenant and time pruning are exact at block granularity. Tag unions can produce false positives when pairs occur on different records; apply predicates again to each decoded record.
+`BlockCatalog.candidatesForQuery` returns a `PruneResult(candidates, prunedCount)` where `prunedCount` sums tenant / time / tag drops. Tenant and time are exact; tag unions can produce false positives when pairs occur on different records, so predicates run again per decoded record. Saturated tag summaries disable tag pruning for that block; unavailable blocks stay in the catalog and count against completeness but drop out of candidates.
 
-If a tag summary exceeds its cap, mark it saturated and disable tag pruning for that block. Never drop tag pairs and then treat the incomplete set as exhaustive. Unknown metadata must produce scan-or-unavailable behavior, not exclusion. For a query `[from,to)`, reject a block only when `max_timestamp < from` or `min_timestamp >= to`.
+For a query `[from,to)`, a block is rejected when `max_timestamp < from` or `min_timestamp >= to`. Coverage proven by `SearchEngineTest.tenantAndTimePruningAreExact` and, at the HTTP layer, by `HttpApiIntegrationTest.searchWithWrongTenantReturnsEmpty`.
 
-Prune using resident catalog entries before opening payload files. Startup still reads headers, so "before touching disk" describes normal query candidate selection, not the entire engine lifecycle. The 95% pruning figure is a target on selective workloads, not an invariant.
+Measured prune rate is workload-dependent. Cross-tenant queries in the 2026-09-16 run bundle achieved **33.3 %** (1 of 3 blocks pruned by tenant). Within a single tenant, uniform-random 24-hour synthetic data doesn't prune further because every block spans the full time window and contains every level — a workload-shape observation, not an engine limitation. Streaming ingest (narrow time-range blocks) would push time-pruning much higher. The 95 % pruning figure is a target on selective incident workloads, not an invariant, and remains unmeasured under real streaming traffic.
 
 ## Search execution and mapped files
 
-Use `Executors.newVirtualThreadPerTaskExecutor()` for structured task ownership and scatter/gather orchestration. Avoid one submitted task per block over an unbounded catalog: submit a bounded worker group that pulls candidate IDs. Enforce a global scan limit across queries and a separate active-query limit. Acquire permits before allocating decompression buffers; release them in `finally` after the task has actually stopped.
+`SearchEngine` uses `Executors.newVirtualThreadPerTaskExecutor()`. Global `queryPermits` semaphore (default 4) bounds concurrent queries at the entry point via `tryAcquire()` — starved queries return `timed_out=partial` immediately rather than blocking. Global `scanPermits` semaphore (default `max(1, availableProcessors − 1)`) bounds concurrent block scans; each scan acquires with `tryAcquire(remainingNanos, NANOSECONDS)` so a starved scan gives up by the query's own deadline instead of blocking. That fix (`feefd93`) is exercised by `SearchEngineTest.queryReturnsTimedOutInsteadOfBlockingUnderScanPermitStarvation`.
 
-Virtual threads are not intended to accelerate long CPU-intensive operations. Bounded CPU parallelism and pruning are the performance hypotheses here; compare worker settings empirically. See [Java 21 virtual threads](https://docs.oracle.com/en/java/javase/21/core/virtual-threads.html).
+The deadline is set once in nanoseconds and checked at three points: between blocks in the main future-drain loop, at the top of every scan before acquiring a mapping, and every 256 records inside a scan loop. Timeout cancels every outstanding future so scans return cleanly rather than being abandoned.
 
-Map finalized files read-only, with independent buffer views per reader. Never truncate or mutate a mapped published file. Use one shared mapping per block and account for its lifetime against the finite block ceiling; a per-query remap can accumulate mappings faster than collection. Closing a `FileChannel` is not an explicit unmap. Java documents mapping lifetime as tied to buffer garbage collection; see [MappedByteBuffer](https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/nio/MappedByteBuffer.html).
+Virtual threads are not a CPU speedup; bounded CPU parallelism and pruning are the performance hypotheses. See [Java 21 virtual threads](https://docs.oracle.com/en/java/javase/21/core/virtual-threads.html).
 
-Do not rely on unsupported cleaners or preview APIs. Keep deletion/retention outside this sprint and test Windows behavior. Measure mapped/resident memory and native overhead; mmap is neither zero-memory nor guaranteed disk-free access. Validate files before starting corruption fixtures; never truncate files while live readers hold mappings.
+### Bounded mmap cache
 
-Each worker maintains a capped earliest-K heap and match count; the coordinator merges under a global byte reservation. Stream completed worker output into the bounded merge rather than retaining all block matches. If result-byte capacity is exhausted, end with explicit partial/resource-limit information. Timeout cancels outstanding tasks; check interruption during scanning. Do not catch `Throwable` or treat programming defects as ordinary corrupt blocks.
+Mapped files use `BlockMapping`, a wrapper around a read-only `FileChannel` + `MappedByteBuffer`. Each reader takes a `duplicate()` view so concurrent scans don't share position/limit. `BlockCatalog` caches mappings in a Caffeine `Cache<String, BlockMapping>` bounded by `mmap-cache-size` (default 256); the eviction listener closes the FileChannel. Concurrent scanners already holding a `duplicate()` view keep working — the mapping lifetime is tied to garbage collection of the `MappedByteBuffer`, not to the channel. Published block files are never mutated or deleted during a live run, which is what makes bounded caching safe.
+
+This closes the "unbounded FileChannel accumulation on large catalogs" concern earlier notes flagged. Coverage: `MmapCacheEvictionTest` (cache stays bounded under repeated misses, reopening evicted blocks still reads correctly, `markUnavailable` invalidates the cache entry).
+
+### Result merge
+
+Each scan returns matches into a shared `PriorityQueue` bounded by the requested `limit` (min-heap ordered by timestamp, reversed). `totalHitsSeen` counts every candidate match observed across scans; `truncated=true` when it exceeds `returned`. Failed scans (corruption, mapping load failure) count into `skipped_blocks`; timed-out scans set `timed_out`; `partial=true` fires whenever `scanned < candidates`, or any scan skipped, or any block was already unavailable at query start, or the query timed out. Every response carries all five counts so a client can always tell what actually happened.
+
+`RuntimeException`-typed defects propagate; corruption paths catch `BlockReader.BlockCorruptException` specifically and degrade the block to unavailable rather than treating a programming bug as ordinary data damage.
 
 ## LLM-assisted query translation (frontend only)
 
@@ -156,6 +170,12 @@ The system prompt provides:
 
 ## Observability and verification
 
-Expose low-cardinality Micrometer counters/gauges/timers for accepted and published bytes/records, queue and buffer bytes, flush reasons/lag/failures, candidates/pruned/scanned/skipped blocks, unavailable files, query durations/timeouts, active queries, and scan permits. Avoid tenant IDs, arbitrary tags, and messages as metric labels.
+`com.blocklog.observability.EngineMetrics` registers Micrometer counters, gauges, and timers with the injected `MeterRegistry`. Labels never carry tenant IDs, tag values, or message content — only the low-cardinality `reason` tag on the flush counter (`size|age`). Shipped instruments:
 
-See [testing evidence](testing-evidence.md) for failure injection, reference-search equivalence, concurrency tests, and measurement definitions. JMH measures isolated hot paths; an end-to-end harness measures sustained persistence, p95 API search latency, and process memory.
+- Counters: `blocklog.ingest.accepted.records`, `blocklog.ingest.accepted.bytes`, `blocklog.ingest.rejected`, `blocklog.persist.records`, `blocklog.persist.bytes`, `blocklog.flush.by{reason}`, `blocklog.flush.failures`, `blocklog.blocks.published`, `blocklog.search.blocks.{candidates,scanned,pruned,skipped}`, `blocklog.search.queries.timed_out`, `blocklog.search.queries.rejected{reason=active_limit}`.
+- Timers: `blocklog.flush.duration`, `blocklog.search.duration`.
+- Gauges: `blocklog.queue.bytes`, `blocklog.buffer.bytes`, `blocklog.search.queries.active`, `blocklog.search.scan_permits.free`, `blocklog.catalog.unavailable`.
+
+Prometheus scrape at `/actuator/prometheus`; `HttpApiIntegrationTest.prometheusEndpointExposesEngineMetrics` pins the mangled counter names (`blocklog_ingest_accepted_records_total`, `blocklog_flush_by_total{reason="size"}`) so the tag contract survives future refactors. In Spring Boot Test scope, the endpoint requires an explicit `management.prometheus.metrics.export.enabled=true` override; the runtime autoconfig handles it in production.
+
+See [testing evidence](testing-evidence.md) for the measured bundle (ingestion rate, compression ratio, search latency percentiles, memory delta, JMH codec throughput) with reproduction commands.
