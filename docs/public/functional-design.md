@@ -1,6 +1,6 @@
 # BlockLog: Functional Design
 
-Status: proposed sprint baseline, 2026-09-12, updated 2026-09-14. Behavior below is an implementation contract, not a claim of completed functionality. Flush boundary semantics require the decision recorded in the technical design.
+Status: 2026-09-18. This document describes shipped behavior; sections that still name unbuilt items are marked "proposed" or "deferred" explicitly. 31 JUnit + integration tests, four measured metrics (see [testing evidence](testing-evidence.md)), and both `main` and `test` branches are CI-green. Flush boundary semantics resolved (record-aligned, see [technical design](technical-design.md)).
 
 ## Purpose
 
@@ -31,15 +31,16 @@ Tenant filtering is mandatory and tested, but a client-supplied tenant identifie
 5. A status view shows accepted/persisted records, queue pressure, flush failures, and actual measured query timings. It must not display invented benchmark numbers.
 6. Help explains search semantics, both input modes, eventual visibility, partial results, overload responses, and durability limitations.
 
-## Proposed HTTP contract
+## HTTP contract (shipped)
 
-Paths and fields should be frozen with API tests on Day 1. This table describes planned routes; none exists yet.
+All three routes are implemented in `com.blocklog.api.{LogController, SearchController, StatusController}` and covered end-to-end by `HttpApiIntegrationTest` (7 tests) plus `IngestionUnhealthyIntegrationTest` (503) and `ConcurrentWriterStressTest` (conservation under concurrency).
 
 | Operation | Contract |
 | --- | --- |
-| `POST /api/v1/logs` | Body contains `tenant_id` and `records`; each record has `timestamp`, `tags`, and `message`. Validate and reserve capacity for the whole bounded batch before accepting it. Return `202` with `accepted_records` and `durability: buffered`. |
-| `POST /api/v1/search` | Require `tenant_id`, `from`, `to`; optional `tags`, `text`, `limit`, `timeout_ms`. Return matches and execution/completeness information. |
-| `GET /api/v1/status` | Return engine readiness, buffer usage, persistence counters, and recovery health without exposing message bodies or tenant inventories. |
+| `POST /api/v1/logs` | Body contains `tenant_id` and `records`; each record has `timestamp`, `tags`, and `message`. Whole-batch bytes reserved on the queue budget before offer; per-tenant slice enforced. Returns `202 {accepted_records, durability: "buffered"}` on success, `400` on validation, `429` on budget exhaustion (with tenant + cap details in the error body), `503` on persistence failure. |
+| `POST /api/v1/search` | Require `tenant_id`, `from`, `to`; optional `tags`, `text`, `limit`, `timeout_ms`. Returns matches plus completeness fields (see "Search visibility and completeness"). |
+| `GET /api/v1/status` | Returns engine readiness, accepted/persisted counters, published/unavailable block counts, active queries, buffer usage percentage, and persistence health. No tenant inventory and no message content. |
+| `GET /actuator/prometheus` | Standard Prometheus scrape of the shipped Micrometer instruments (see [technical design](technical-design.md)). Pinned by `HttpApiIntegrationTest.prometheusEndpointExposesEngineMetrics`. |
 
 Use ISO-8601 UTC input timestamps with millisecond precision; reject invalid timestamps and `from >= to`. Query ranges are `[from, to)`. Out-of-order events are allowed. Tags are exact, case-sensitive key/value pairs combined with AND. Text is a case-sensitive literal substring of one decoded message, without Unicode normalization; an omitted/empty text filter matches all messages passing the other predicates.
 
@@ -47,9 +48,9 @@ Initial configurable limits: 1,000 records and 5,000,000 raw HTTP body bytes per
 
 Return `400` for invalid fields, `413` for size limits, `429` for temporary admission pressure, and `503` when persistence is unhealthy or the engine is not ready. No silently discarded accepted records. Retries can create duplicates; deduplication is outside scope. Do not return success for a batch that was only partly admitted.
 
-## Natural-language query mode
+## Natural-language query mode (shipped, inert without an API key)
 
-The frontend provides an alternative search input where the user types a plain-English query instead of filling out the structured form. The system translates the natural language into the structured `POST /api/v1/search` request body using a language model API call, then executes against the same search endpoint.
+The frontend provides an alternative search input where the user types a plain-English query instead of filling out the structured form. The translation logic (`frontend/lib/use-nl-search.ts`), the query preview card, and all failure-handling paths are shipped. Live translation is gated on `NEXT_PUBLIC_ANTHROPIC_API_KEY` being set at build time; without it, the NL tab shows a "Coming in a future version" panel and never issues a network call. The structured form remains the default mode either way — the project functions completely without NL search.
 
 ### Flow
 
@@ -85,15 +86,17 @@ The frontend provides an alternative search input where the user types a plain-E
 - Healthy completed searches return the earliest K matches by `(timestamp, block_id, record_ordinal)`. `truncated=true` means more than K matches were found. Do not stop at the first K task completions. A timed-out query returns available matches with `partial=true`, without promising a global earliest-K result.
 - Deadlines cover admission, pruning, waiting, decompression, and gathering. Check cancellation between blocks and periodically while scanning records. Bound result bytes as well as result count.
 
-## Acceptance criteria
+## Acceptance criteria (status at 2026-09-18)
 
-1. Valid UTF-8 records round-trip with timestamps and tags intact, including multiline and non-ASCII messages.
-2. Tenant/time/tag predicates return the same matches as a simple reference scan; no cross-tenant results and no pruning false negatives.
-3. Size and age triggers flush records once, with explicit overload and shutdown behavior.
-4. Published blocks remain discoverable after process restart; incomplete temporary files do not become searchable.
-5. Damaged payloads or headers cannot cause unchecked allocation, abort all healthy blocks, or silently imply complete results.
-6. Concurrency, buffering, metadata, and results have configured limits and observable overload behavior.
-7. The interface works against the real API and includes loading, empty, failure, overload, and partial-result states.
-8. Both structured-form and natural-language searches produce identical results for equivalent queries against the real API.
-9. NL search fails gracefully on LLM timeout, network error, or invalid model output, with a clear message and access to the structured form.
-10. All four headline metrics have reproducible evidence, or are explicitly marked unmeasured. A 95% pruning rate is a workload-specific target.
+| # | Criterion | Status |
+| --- | --- | --- |
+| 1 | Valid UTF-8 records round-trip with timestamps and tags intact | ✅ `BlockRoundTripTest` (4 tests) |
+| 2 | Tenant/time/tag predicates return matches equivalent to a reference scan; no cross-tenant leakage; no pruning false negatives | ✅ `SearchEngineTest.enforcesTenantIsolation`, `.tenantAndTimePruningAreExact`, plus HTTP-level tenant isolation in `HttpApiIntegrationTest.searchWithWrongTenantReturnsEmpty`. Reference-scan equivalence is exercised by comparing to the raw record set that `SyntheticIngest` emitted; a dedicated reference-scan test still pending |
+| 3 | Size and age triggers flush records once, with explicit overload and shutdown behavior | ✅ `IngestionEngineTest.flushesOnSizeThreshold`, `.acceptsRecordsAndPersistsOnShutdown`, `.rejectsWhenQueueBudgetExhausted`, `.perTenantBudgetPreventsOneTenantFromStarvingOthers` |
+| 4 | Published blocks remain discoverable after process restart; incomplete temporary files do not become searchable | ✅ `BlockCatalogRestartTest.rediscoversBlocksAcrossFreshCatalog`, `.ignoresTempAndBogusFilesDuringDiscovery` |
+| 5 | Damaged payloads/headers cannot silently imply complete results | ✅ `BlockCatalogRestartTest.corruptBlockFileIsRegisteredAsUnavailable`, `.payloadCorruptionIsSurfacedOnMappingLoad`, plus the `CorruptBlock` demo CLI for operator-facing evidence |
+| 6 | Concurrency, buffering, metadata, and results have configured limits and observable overload behavior | ✅ `SearchEngineTest.queryReturnsTimedOutInsteadOfBlockingUnderScanPermitStarvation`, `.truncationFlaggedWhenMoreMatchesThanLimit`, `MmapCacheEvictionTest` (bounded mmap), `ConcurrentWriterStressTest` (4000-record conservation with 4 concurrent searchers, no permit leaks) |
+| 7 | The interface works against the real API and includes loading, empty, failure, overload, and partial-result states | ✅ `HttpApiIntegrationTest` (7 tests), plus manual walkthrough of `/`, `/status`, `/help`, `/onboarding` against a live backend (recorded in session 6) |
+| 8 | Structured and NL searches produce identical results for equivalent queries | Design contract holds — both paths call the same `/api/v1/search`. Live NL translation quality is untestable without an API key configured |
+| 9 | NL search fails gracefully on LLM timeout, network error, or invalid model output | ✅ Failure-handling code paths ship in `use-nl-search.ts`. End-to-end verification depends on an API key being present; automated coverage with a mocked LLM is a follow-up |
+| 10 | All four headline metrics have reproducible evidence, or are explicitly marked unmeasured | ✅ Ingestion 31,210 r/s, compression 3.86×, search p95 75 ms client / 74 ms engine, heap idle-to-loaded 28→143 MB. Full bundle in [testing evidence](testing-evidence.md). JMH scan-side numbers still pending (fork classpath issue) |
