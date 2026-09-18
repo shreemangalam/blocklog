@@ -95,6 +95,39 @@ Same seeds → same records byte-for-byte. See [`docs/public/testing-evidence.md
 
 ---
 
+## Demo the "honest partiality" story
+
+The engine promises: corruption becomes visibility, not silence. To watch that fire end-to-end:
+
+```bash
+# 1. Seed a small tenant, wait for the block to publish
+cd backend
+java -cp target/classes com.blocklog.demo.SyntheticIngest --tenant demo-shop --count 1000
+
+# 2. Flip one byte deep in a block's compressed payload
+ls data/*.blk
+java -cp target/classes com.blocklog.demo.CorruptBlock --file data/<uuid>.blk
+
+# 3. Restart the backend so the catalog rebuilds from disk
+#    (Ctrl+C the running server, then relaunch)
+./mvnw -q spring-boot:run
+
+# 4. Search overlapping the corrupted block's time range
+curl -sS -X POST http://localhost:8080/api/v1/search -H 'Content-Type: application/json' -d '{
+  "tenant_id": "demo-shop",
+  "from": "2020-01-01T00:00:00Z",
+  "to": "2030-01-01T00:00:00Z",
+  "text": null,
+  "tags": null,
+  "limit": 100,
+  "timeout_ms": 5000
+}' | jq '{partial, unavailable_blocks, scanned_blocks, candidate_blocks}'
+```
+
+Response carries `partial: true`, `unavailable_blocks: 1`, and `scanned_blocks < candidate_blocks`. The block passed header CRC at discovery (still counted as a candidate) but the payload CRC caught the flip at scan time — the block degrades to unavailable on the first scan and the response reports it honestly. `/status` will also now show `unavailable_blocks >= 1`.
+
+---
+
 ## Tech stack
 
 **Backend** — Java 21, virtual threads, Spring Boot 3.4, `java.nio`, lz4-java, jctools MPSC queue, Caffeine bounded mmap cache, Micrometer + Prometheus metrics. JUnit 5 + JMH.
