@@ -100,11 +100,11 @@ export default function OnboardingPage() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
             <StepBadge done={ingested} />
-            Step 1 — Submit a synthetic batch
+            Step 1. Submit a synthetic batch
           </CardTitle>
           <CardDescription>
             Sends three records under tenant <code>{DEMO_TENANT}</code>. The response is{" "}
-            <code>202 buffered</code> — accepted into memory, not yet searchable.
+            <code>202 buffered</code>. Accepted into memory, not yet searchable.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -124,11 +124,11 @@ export default function OnboardingPage() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
             <StepBadge done={searchResult !== null} />
-            Step 2 — Wait for persistence, then search
+            Step 2. Wait for persistence, then search
           </CardTitle>
           <CardDescription>
             Blocks publish on a 5-second age trigger or a 5MB size trigger, whichever comes
-            first. Wait a few seconds after step 1, then run the example search below — it
+            first. Wait a few seconds after step 1, then run the example search below. It
             filters tenant <code>{DEMO_TENANT}</code>, tag <code>env=prod</code>, last 10 minutes.
           </CardDescription>
         </CardHeader>
@@ -149,18 +149,18 @@ export default function OnboardingPage() {
                 {searchResult.scanned_blocks}/{searchResult.candidate_blocks} blocks scanned
                 {searchResult.partial && (
                   <Badge variant="outline" className="ml-2 border-amber-500 text-amber-700">
-                    Partial — try again in a moment, the block may not be published yet
+                    Partial. Try again in a moment; the block may not be published yet
                   </Badge>
                 )}
               </p>
               {searchResult.results.map((hit, i) => (
                 <div key={i} className="rounded border border-border/60 bg-muted/30 p-2 text-xs font-mono">
-                  {hit.timestamp} — {hit.message}
+                  {hit.timestamp}: {hit.message}
                 </div>
               ))}
               {searchResult.returned_count === 0 && (
                 <p className="text-xs text-muted-foreground">
-                  No results yet — the batch may still be buffered. Wait a few seconds and
+                  No results yet. The batch may still be buffered; wait a few seconds and
                   run the search again.
                 </p>
               )}
@@ -171,7 +171,7 @@ export default function OnboardingPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Step 3 — Try natural language</CardTitle>
+          <CardTitle className="text-base">Step 3. Try natural language</CardTitle>
           <CardDescription>
             The full search page also has a Natural Language tab. In a deployment with a
             translation service configured, typing something like:
@@ -184,7 +184,7 @@ export default function OnboardingPage() {
           <p className="text-sm text-muted-foreground">
             would generate the same structured query as step 2, shown as an editable preview
             before it runs. This deployment ships that UI and logic but has no translation
-            service configured, so the tab explains that and defers to the structured form —
+            service configured, so the tab explains that and defers to the structured form,
             covered in <Link href="/help" className="underline">Help</Link>.
           </p>
           <Button asChild variant="outline">

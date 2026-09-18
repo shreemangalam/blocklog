@@ -49,7 +49,7 @@ export function SearchResults({ loading, error, response }: SearchResultsProps) 
         <Inbox className="size-8" />
         <p className="text-sm">No matching records for this query.</p>
         {response.candidate_blocks === 0 && (
-          <p className="text-xs">No blocks matched this tenant/time range — check tenant ID and range.</p>
+          <p className="text-xs">No blocks matched this tenant/time range. Check tenant ID and range.</p>
         )}
       </div>
     );

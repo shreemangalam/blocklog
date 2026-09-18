@@ -43,7 +43,7 @@ export function NLSearchTab({ onExecute, loading }: NLSearchTabProps) {
             before running.
           </p>
           <p className="text-xs text-muted-foreground">
-            Use the structured form for now — it covers every query this mode would generate.
+            Use the structured form for now. It covers every query this mode would generate.
           </p>
         </CardContent>
       </Card>
@@ -90,7 +90,7 @@ export function NLSearchTab({ onExecute, loading }: NLSearchTabProps) {
       {state.status === "success" && state.parsedQuery && (
         <div className="space-y-3 rounded-lg border border-border p-4">
           <div className="flex items-center justify-between">
-            <h4 className="text-sm font-semibold">Generated query — review and edit before running</h4>
+            <h4 className="text-sm font-semibold">Generated query. Review and edit before running.</h4>
             <Button variant="ghost" size="sm" onClick={reset}>
               Start over
             </Button>
