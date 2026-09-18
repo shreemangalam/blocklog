@@ -20,7 +20,12 @@ public record EngineConfig(
         int maxQueryTimeoutMs,
         int defaultQueryTimeoutMs,
         int scanPermits,
-        int maxActiveQueries
+        int maxActiveQueries,
+        long queueBytesBudget,
+        long bufferBytesBudget,
+        int shutdownDeadlineSeconds,
+        int mmapCacheSize,
+        long perTenantQueueBytesBudget
 ) {
     public int effectiveScanPermits() {
         return scanPermits > 0 ? scanPermits : Math.max(1, Runtime.getRuntime().availableProcessors() - 1);

@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main, test]
+  pull_request:
+    branches: [main, test]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (Java 21)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: maven
+
+      # Use the ubuntu-latest preinstalled mvn instead of the Windows-only
+      # mvnw.cmd bundled with this repo. Local Windows dev still uses mvnw.cmd.
+      - name: Compile
+        run: mvn -B -ntp compile
+
+      - name: Test
+        run: mvn -B -ntp test
+
+      - name: Upload Surefire reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports
+          path: backend/target/surefire-reports
+          if-no-files-found: ignore
+
+  frontend:
+    name: Frontend (Node 20)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Next 16 generates LayoutProps<"/"> and other page types into
+      # .next/types during `next build`, so tsc must run AFTER build (or as
+      # part of it). `next build` already runs the same TypeScript check, so
+      # we let it do double duty instead of adding a separate tsc step.
+      - name: Build
+        env:
+          # NL search is inert without a key; build must succeed regardless.
+          NEXT_PUBLIC_ANTHROPIC_API_KEY: ""
+        run: npm run build

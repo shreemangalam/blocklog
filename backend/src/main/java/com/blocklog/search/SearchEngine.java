@@ -4,16 +4,30 @@ import com.blocklog.metadata.BlockCatalog;
 import com.blocklog.metadata.BlockMetadata;
 import com.blocklog.model.LogRecord;
 import com.blocklog.model.SearchResponse;
+import com.blocklog.observability.EngineMetrics;
+import com.blocklog.storage.BlockMapping;
 import com.blocklog.storage.BlockReader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Instant;
-import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
+/**
+ * Bounded virtual-thread search executor.
+ *
+ * - Global active-query semaphore rejects excess queries with an explicit
+ *   partial response (rather than blocking indefinitely).
+ * - Global scan-permit semaphore bounds concurrent per-block decompression.
+ * - Deadline is checked between blocks AND periodically inside a scan.
+ * - Truncation is flagged when any block generated more matches than the
+ *   result heap could keep (not the buggy heap.size() >= limit heuristic).
+ * - Cancels outstanding scans on timeout so we don't leak threads or
+ *   scan-permit reservations.
+ */
 public class SearchEngine {
 
     private static final Logger log = LoggerFactory.getLogger(SearchEngine.class);
@@ -21,61 +35,75 @@ public class SearchEngine {
     private final BlockCatalog catalog;
     private final Semaphore scanPermits;
     private final Semaphore queryPermits;
+    private final int maxActiveQueries;
+    private final EngineMetrics metrics;
 
-    public SearchEngine(BlockCatalog catalog, int scanPermitCount, int maxActiveQueries) {
+    public SearchEngine(BlockCatalog catalog, int scanPermitCount, int maxActiveQueries, EngineMetrics metrics) {
         this.catalog = catalog;
         this.scanPermits = new Semaphore(scanPermitCount);
         this.queryPermits = new Semaphore(maxActiveQueries);
+        this.maxActiveQueries = maxActiveQueries;
+        this.metrics = metrics;
+        metrics.setScanPermitsFree(scanPermits.availablePermits());
     }
 
     public SearchResponse search(String tenantId, long fromMs, long toMs,
                                   Map<String, String> tags, String text,
                                   int limit, long timeoutMs) {
-        long startTime = System.currentTimeMillis();
-        long deadline = startTime + timeoutMs;
+        long startNanos = System.nanoTime();
+        long deadlineNanos = startNanos + TimeUnit.MILLISECONDS.toNanos(timeoutMs);
 
         if (!queryPermits.tryAcquire()) {
-            return emptyResult(0, 0, 0, 0, true, false, System.currentTimeMillis() - startTime);
+            metrics.recordQueryRejectedActive();
+            long elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
+            return new SearchResponse(List.of(), 0, true, false, false,
+                    0, catalog.unavailableCount(), 0, 0, elapsed);
         }
+        metrics.setActiveQueries(maxActiveQueries - queryPermits.availablePermits());
 
         try {
-            List<BlockMetadata> candidates = catalog.candidatesForQuery(tenantId, fromMs, toMs, tags);
+            BlockCatalog.PruneResult prune = catalog.candidatesForQuery(tenantId, fromMs, toMs, tags);
+            List<BlockMetadata> candidates = prune.candidates();
             int candidateCount = candidates.size();
-            int unavailableCount = catalog.unavailableCount();
+            int prunedCount = prune.prunedCount();
+            int unavailableAtStart = catalog.unavailableCount();
 
             AtomicInteger scannedBlocks = new AtomicInteger();
             AtomicInteger skippedBlocks = new AtomicInteger();
+            AtomicLong totalHitsSeen = new AtomicLong();
 
             PriorityQueue<SearchResponse.SearchHit> resultHeap = new PriorityQueue<>(
-                    limit + 1,
+                    Math.max(limit, 1) + 1,
                     Comparator.comparing(SearchResponse.SearchHit::timestamp).reversed()
             );
 
             boolean timedOut = false;
 
             try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
-                List<Future<List<SearchResponse.SearchHit>>> futures = new ArrayList<>();
-
+                List<Future<ScanOutcome>> futures = new ArrayList<>(candidates.size());
                 for (BlockMetadata meta : candidates) {
-                    if (System.currentTimeMillis() >= deadline) {
+                    futures.add(executor.submit(() ->
+                            scanBlock(meta, fromMs, toMs, tags, text, deadlineNanos)));
+                }
+
+                for (Future<ScanOutcome> future : futures) {
+                    long remainingNanos = deadlineNanos - System.nanoTime();
+                    if (remainingNanos <= 0) {
                         timedOut = true;
                         break;
                     }
-
-                    futures.add(executor.submit(() -> scanBlock(meta, fromMs, toMs, tags, text)));
-                }
-
-                for (Future<List<SearchResponse.SearchHit>> future : futures) {
                     try {
-                        long remaining = deadline - System.currentTimeMillis();
-                        if (remaining <= 0) {
-                            timedOut = true;
-                            break;
+                        ScanOutcome outcome = future.get(remainingNanos, TimeUnit.NANOSECONDS);
+                        if (outcome.failed()) {
+                            skippedBlocks.incrementAndGet();
+                            continue;
                         }
-                        List<SearchResponse.SearchHit> hits = future.get(remaining, TimeUnit.MILLISECONDS);
+                        if (outcome.timedOut()) {
+                            timedOut = true;
+                        }
                         scannedBlocks.incrementAndGet();
-
-                        for (SearchResponse.SearchHit hit : hits) {
+                        totalHitsSeen.addAndGet(outcome.hits().size());
+                        for (SearchResponse.SearchHit hit : outcome.hits()) {
                             resultHeap.offer(hit);
                             if (resultHeap.size() > limit) {
                                 resultHeap.poll();
@@ -93,12 +121,24 @@ public class SearchEngine {
                         break;
                     }
                 }
+
+                if (timedOut) {
+                    for (Future<ScanOutcome> f : futures) f.cancel(true);
+                }
             }
 
             List<SearchResponse.SearchHit> sorted = new ArrayList<>(resultHeap);
             sorted.sort(Comparator.comparing(SearchResponse.SearchHit::timestamp));
-            boolean truncated = resultHeap.size() >= limit && scannedBlocks.get() > 0;
-            boolean partial = timedOut || skippedBlocks.get() > 0 || unavailableCount > 0;
+
+            boolean truncated = totalHitsSeen.get() > sorted.size();
+            boolean partial = timedOut
+                    || skippedBlocks.get() > 0
+                    || unavailableAtStart > 0
+                    || scannedBlocks.get() < candidateCount;
+
+            long elapsedNanos = System.nanoTime() - startNanos;
+            metrics.recordSearch(elapsedNanos, candidateCount, scannedBlocks.get(),
+                    prunedCount, skippedBlocks.get(), timedOut);
 
             return new SearchResponse(
                     sorted,
@@ -107,32 +147,52 @@ public class SearchEngine {
                     truncated,
                     timedOut,
                     skippedBlocks.get(),
-                    unavailableCount,
+                    unavailableAtStart,
                     candidateCount,
                     scannedBlocks.get(),
-                    System.currentTimeMillis() - startTime
+                    TimeUnit.NANOSECONDS.toMillis(elapsedNanos)
             );
         } finally {
             queryPermits.release();
+            metrics.setActiveQueries(maxActiveQueries - queryPermits.availablePermits());
         }
     }
 
-    private List<SearchResponse.SearchHit> scanBlock(BlockMetadata meta,
-                                                      long fromMs, long toMs,
-                                                      Map<String, String> tags, String text) throws Exception {
-        scanPermits.acquire();
+    private ScanOutcome scanBlock(BlockMetadata meta,
+                                   long fromMs, long toMs,
+                                   Map<String, String> tags, String text,
+                                   long deadlineNanos) {
+        long permitWaitNanos = deadlineNanos - System.nanoTime();
+        if (permitWaitNanos <= 0) return ScanOutcome.asTimedOut();
+
+        boolean acquired;
         try {
-            BlockReader.BlockCorruptException corruptEx = null;
-            List<LogRecord> records;
-            try {
-                var header = BlockReader.readHeader(meta.filePath());
-                records = BlockReader.readRecords(meta.filePath(), header);
-            } catch (BlockReader.BlockCorruptException e) {
-                throw e;
-            }
+            acquired = scanPermits.tryAcquire(permitWaitNanos, TimeUnit.NANOSECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return ScanOutcome.asTimedOut();
+        }
+        if (!acquired) return ScanOutcome.asTimedOut();
+        metrics.setScanPermitsFree(scanPermits.availablePermits());
+
+        try {
+            if (System.nanoTime() >= deadlineNanos) return ScanOutcome.asTimedOut();
+
+            BlockMapping mapping = catalog.mappingFor(meta);
+            if (mapping == null) return ScanOutcome.asFailed();
+
+            var header = BlockReader.parseHeaderFromMapping(mapping);
+            List<LogRecord> records = BlockReader.readRecords(mapping, header);
 
             List<SearchResponse.SearchHit> hits = new ArrayList<>();
+            int checked = 0;
             for (LogRecord record : records) {
+                if ((++checked & 0xFF) == 0 && System.nanoTime() >= deadlineNanos) {
+                    return new ScanOutcome(hits, false, true);
+                }
+                if (Thread.currentThread().isInterrupted()) {
+                    return new ScanOutcome(hits, false, true);
+                }
                 if (record.timestamp() < fromMs || record.timestamp() >= toMs) continue;
 
                 if (tags != null && !tags.isEmpty()) {
@@ -156,22 +216,26 @@ public class SearchEngine {
                         record.message()
                 ));
             }
-            return hits;
+            return new ScanOutcome(hits, false, false);
+        } catch (BlockReader.BlockCorruptException e) {
+            log.warn("Corrupt block {} during scan: {}", meta.blockId(), e.getMessage());
+            catalog.markUnavailable(meta.blockId());
+            return ScanOutcome.asFailed();
+        } catch (Exception e) {
+            log.warn("Unexpected error scanning block {}", meta.blockId(), e);
+            return ScanOutcome.asFailed();
         } finally {
             scanPermits.release();
+            metrics.setScanPermitsFree(scanPermits.availablePermits());
         }
     }
 
     public int getActiveQueries() {
-        return queryPermits.availablePermits() >= 0
-                ? (queryPermits.availablePermits() == queryPermits.availablePermits()
-                ? 0 : 0)
-                : 0;
+        return maxActiveQueries - queryPermits.availablePermits();
     }
 
-    private SearchResponse emptyResult(int candidates, int scanned, int skipped, int unavailable,
-                                        boolean partial, boolean timedOut, long elapsed) {
-        return new SearchResponse(List.of(), 0, partial, false, timedOut,
-                skipped, unavailable, candidates, scanned, elapsed);
+    private record ScanOutcome(List<SearchResponse.SearchHit> hits, boolean failed, boolean timedOut) {
+        static ScanOutcome asFailed() { return new ScanOutcome(List.of(), true, false); }
+        static ScanOutcome asTimedOut() { return new ScanOutcome(List.of(), false, true); }
     }
 }
