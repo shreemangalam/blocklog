@@ -1,0 +1,168 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 720" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#1e293b"/>
+    </marker>
+    <marker id="arrowGray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#64748b"/>
+    </marker>
+    <style>
+      .col      { font-size: 20px; font-weight: 700; fill: #0f172a; }
+      .box      { font-size: 13px; fill: #0f172a; }
+      .sub      { font-size: 11px; fill: #475569; }
+      .lbl      { font-size: 11px; fill: #334155; }
+      .pill     { fill: #f1f5f9; stroke: #cbd5e1; stroke-width: 1.4; }
+      .pillEmph { fill: #e0e7ff; stroke: #6366f1; stroke-width: 1.4; }
+      .catalog  { fill: #ecfeff; stroke: #06b6d4; stroke-width: 1.6; }
+      .disk     { fill: #fef3c7; stroke: #d97706; stroke-width: 1.6; }
+      .fail     { fill: #fef2f2; stroke: #ef4444; stroke-width: 1.4; }
+      .flow     { stroke: #1e293b; stroke-width: 1.6; fill: none; }
+      .flowSoft { stroke: #64748b; stroke-width: 1.2; fill: none; stroke-dasharray: 4 4; }
+    </style>
+  </defs>
+
+  <!-- Title -->
+  <text x="480" y="38" class="col" text-anchor="middle">BlockLog architecture — one process, index-free</text>
+  <text x="480" y="60" class="sub" text-anchor="middle">Ingest + Search pipelines meet at an in-memory catalog over immutable LZ4 blocks on disk</text>
+
+  <!-- Column headers -->
+  <text x="180" y="100" class="col" text-anchor="middle">INGEST</text>
+  <text x="780" y="100" class="col" text-anchor="middle">SEARCH</text>
+
+  <!-- ==== INGEST COLUMN ==== -->
+  <!-- HTTP -->
+  <rect x="60" y="118" width="240" height="46" rx="10" class="pillEmph"/>
+  <text x="180" y="140" class="box" text-anchor="middle">POST /api/v1/logs</text>
+  <text x="180" y="156" class="sub" text-anchor="middle">tenant_id + records[]</text>
+
+  <line x1="180" y1="164" x2="180" y2="188" class="flow" marker-end="url(#arrow)"/>
+
+  <!-- Validate + reserve -->
+  <rect x="60" y="188" width="240" height="52" rx="10" class="pill"/>
+  <text x="180" y="208" class="box" text-anchor="middle">Validate + ByteBudget.tryAcquire</text>
+  <text x="180" y="224" class="sub" text-anchor="middle">whole-batch bytes; per-tenant + global cap</text>
+  <text x="180" y="236" class="sub" text-anchor="middle">fails ⇒ 429 IngestionOverloadException</text>
+
+  <line x1="180" y1="240" x2="180" y2="264" class="flow" marker-end="url(#arrow)"/>
+
+  <!-- MPSC -->
+  <rect x="60" y="264" width="240" height="46" rx="10" class="pill"/>
+  <text x="180" y="286" class="box" text-anchor="middle">jctools MPSC queue</text>
+  <text x="180" y="302" class="sub" text-anchor="middle">HTTP thread returns 202 buffered</text>
+
+  <line x1="180" y1="310" x2="180" y2="334" class="flow" marker-end="url(#arrow)"/>
+
+  <!-- Consumer -->
+  <rect x="60" y="334" width="240" height="46" rx="10" class="pill"/>
+  <text x="180" y="356" class="box" text-anchor="middle">Single consumer thread</text>
+  <text x="180" y="372" class="sub" text-anchor="middle">drains queue → per-tenant buffers</text>
+
+  <line x1="180" y1="380" x2="180" y2="404" class="flow" marker-end="url(#arrow)"/>
+
+  <!-- Buffers -->
+  <rect x="60" y="404" width="240" height="46" rx="10" class="pill"/>
+  <text x="180" y="425" class="box" text-anchor="middle">Per-tenant TenantBuffer</text>
+  <text x="180" y="441" class="sub" text-anchor="middle">bytes owned by bufferBudget</text>
+
+  <line x1="180" y1="450" x2="180" y2="474" class="flow" marker-end="url(#arrow)"/>
+
+  <!-- Flush -->
+  <rect x="60" y="474" width="240" height="46" rx="10" class="pill"/>
+  <text x="180" y="495" class="box" text-anchor="middle">Flush trigger</text>
+  <text x="180" y="511" class="sub" text-anchor="middle">5 MB size OR 5 s age, record-aligned</text>
+
+  <line x1="180" y1="520" x2="180" y2="544" class="flow" marker-end="url(#arrow)"/>
+
+  <!-- LZ4 + CRC + rename -->
+  <rect x="60" y="544" width="240" height="62" rx="10" class="pill"/>
+  <text x="180" y="565" class="box" text-anchor="middle">BlockWriter</text>
+  <text x="180" y="581" class="sub" text-anchor="middle">LZ4 compress · CRC32 header + payload</text>
+  <text x="180" y="595" class="sub" text-anchor="middle">write .tmp · force · atomic rename → .blk</text>
+
+  <!-- Arrow from ingest to catalog+disk -->
+  <path d="M 180 606 Q 180 640 340 650" class="flow" marker-end="url(#arrow)"/>
+
+  <!-- ==== CATALOG + DISK center ==== -->
+  <rect x="340" y="410" width="280" height="90" rx="14" class="catalog"/>
+  <text x="480" y="435" class="box" text-anchor="middle" font-weight="700">BlockCatalog (in-memory)</text>
+  <text x="480" y="454" class="sub" text-anchor="middle">tenant · min/max ts · tag summary per block</text>
+  <text x="480" y="470" class="sub" text-anchor="middle">Caffeine LRU mmap cache (default 256)</text>
+  <text x="480" y="486" class="sub" text-anchor="middle">candidatesForQuery ⇒ PruneResult</text>
+
+  <!-- Disk -->
+  <rect x="340" y="620" width="280" height="62" rx="14" class="disk"/>
+  <text x="480" y="642" class="box" text-anchor="middle" font-weight="700">data/*.blk — immutable blocks</text>
+  <text x="480" y="659" class="sub" text-anchor="middle">restart discovers files, rebuilds catalog</text>
+  <text x="480" y="675" class="sub" text-anchor="middle">temp .blk.tmp.* silently skipped</text>
+
+  <!-- Catalog ↔ disk -->
+  <line x1="480" y1="500" x2="480" y2="618" class="flowSoft" marker-start="url(#arrowGray)" marker-end="url(#arrowGray)"/>
+  <text x="500" y="562" class="lbl">mmap(file) / discovery</text>
+
+  <!-- ==== SEARCH COLUMN ==== -->
+  <!-- HTTP -->
+  <rect x="660" y="118" width="240" height="46" rx="10" class="pillEmph"/>
+  <text x="780" y="140" class="box" text-anchor="middle">POST /api/v1/search</text>
+  <text x="780" y="156" class="sub" text-anchor="middle">tenant + [from,to) + tags + text</text>
+
+  <line x1="780" y1="164" x2="780" y2="188" class="flow" marker-end="url(#arrow)"/>
+
+  <!-- queryPermits -->
+  <rect x="660" y="188" width="240" height="46" rx="10" class="pill"/>
+  <text x="780" y="209" class="box" text-anchor="middle">queryPermits.tryAcquire()</text>
+  <text x="780" y="225" class="sub" text-anchor="middle">bounded concurrent queries</text>
+
+  <line x1="780" y1="234" x2="780" y2="258" class="flow" marker-end="url(#arrow)"/>
+
+  <!-- Prune -->
+  <rect x="660" y="258" width="240" height="60" rx="10" class="pill"/>
+  <text x="780" y="278" class="box" text-anchor="middle">Prune from catalog</text>
+  <text x="780" y="293" class="sub" text-anchor="middle">exact tenant · overlapping time</text>
+  <text x="780" y="307" class="sub" text-anchor="middle">tag union (unless saturated)</text>
+
+  <!-- catalog input arrow -->
+  <path d="M 620 445 Q 660 400 780 318" class="flowSoft" marker-end="url(#arrowGray)"/>
+
+  <line x1="780" y1="318" x2="780" y2="342" class="flow" marker-end="url(#arrow)"/>
+
+  <!-- Virtual thread scans -->
+  <rect x="660" y="342" width="240" height="60" rx="10" class="pill"/>
+  <text x="780" y="362" class="box" text-anchor="middle">Virtual-thread scans</text>
+  <text x="780" y="377" class="sub" text-anchor="middle">scanPermits.tryAcquire(remainingNs)</text>
+  <text x="780" y="391" class="sub" text-anchor="middle">deadline in ns · cancel-on-timeout</text>
+
+  <line x1="780" y1="402" x2="780" y2="426" class="flow" marker-end="url(#arrow)"/>
+
+  <!-- mmap + CRC + decompress + filter -->
+  <rect x="660" y="426" width="240" height="76" rx="10" class="pill"/>
+  <text x="780" y="446" class="box" text-anchor="middle">mmap + verify CRC + LZ4</text>
+  <text x="780" y="461" class="sub" text-anchor="middle">payload CRC fail ⇒ mark unavailable</text>
+  <text x="780" y="475" class="sub" text-anchor="middle">filter by time · tags · text</text>
+  <text x="780" y="491" class="sub" text-anchor="middle">deadline check every 256 records</text>
+
+  <!-- mmap arrow from catalog -->
+  <path d="M 620 470 Q 640 480 660 470" class="flowSoft" marker-end="url(#arrowGray)"/>
+
+  <line x1="780" y1="502" x2="780" y2="526" class="flow" marker-end="url(#arrow)"/>
+
+  <!-- Merge -->
+  <rect x="660" y="526" width="240" height="54" rx="10" class="pill"/>
+  <text x="780" y="547" class="box" text-anchor="middle">Min-heap merge (earliest K)</text>
+  <text x="780" y="565" class="sub" text-anchor="middle">totalHitsSeen &gt; returned ⇒ truncated</text>
+
+  <line x1="780" y1="580" x2="780" y2="604" class="flow" marker-end="url(#arrow)"/>
+
+  <!-- Response -->
+  <rect x="620" y="604" width="320" height="80" rx="14" class="pillEmph"/>
+  <text x="780" y="625" class="box" text-anchor="middle" font-weight="700">Response with honest completeness</text>
+  <text x="780" y="641" class="sub" text-anchor="middle">results · candidate_blocks · scanned_blocks</text>
+  <text x="780" y="656" class="sub" text-anchor="middle">skipped_blocks · unavailable_blocks</text>
+  <text x="780" y="672" class="sub" text-anchor="middle">partial · truncated · timed_out · elapsed_ms</text>
+
+  <!-- Ingest -> Catalog register label -->
+  <text x="300" y="638" class="lbl">register()</text>
+
+  <!-- Footer legend -->
+  <text x="60" y="710" class="sub">Backpressure: 429 IngestionOverloadException · 503 IngestionUnavailableException (buffered ≠ durable; no WAL)</text>
+</svg>
