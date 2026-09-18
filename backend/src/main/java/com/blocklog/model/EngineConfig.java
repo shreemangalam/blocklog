@@ -24,7 +24,8 @@ public record EngineConfig(
         long queueBytesBudget,
         long bufferBytesBudget,
         int shutdownDeadlineSeconds,
-        int mmapCacheSize
+        int mmapCacheSize,
+        long perTenantQueueBytesBudget
 ) {
     public int effectiveScanPermits() {
         return scanPermits > 0 ? scanPermits : Math.max(1, Runtime.getRuntime().availableProcessors() - 1);

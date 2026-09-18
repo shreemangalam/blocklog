@@ -19,10 +19,14 @@ blocklog:
   default-query-timeout-ms: 5000
   scan-permits: 0            # 0 = max(1, availableProcessors - 1)
   max-active-queries: 4
-  queue-bytes-budget: 67108864   # 64 MiB queued encoded records
-  buffer-bytes-budget: 67108864  # 64 MiB active per-tenant buffers
+  queue-bytes-budget: 67108864              # 64 MiB queued encoded records
+  buffer-bytes-budget: 67108864             # 64 MiB active per-tenant buffers
+  # Per-tenant slice of the queue budget. One tenant cannot reserve more than
+  # this even if the global cap has room; other tenants keep working. Set to
+  # 0 (or leave equal to queue-bytes-budget) to disable per-tenant fairness.
+  per-tenant-queue-bytes-budget: 16777216   # 16 MiB per tenant (1/4 of the global)
   shutdown-deadline-seconds: 10
-  mmap-cache-size: 256           # max mmap handles cached before LRU eviction
+  mmap-cache-size: 256                      # max mmap handles cached before LRU eviction
 
 spring:
   jackson:

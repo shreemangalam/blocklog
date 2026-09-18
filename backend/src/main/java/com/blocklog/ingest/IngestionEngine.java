@@ -39,7 +39,7 @@ public class IngestionEngine {
     private final EngineMetrics metrics;
     private final Clock clock;
 
-    private final ByteBudget queueBudget;
+    private final TenantByteBudget queueBudget;
     private final ByteBudget bufferBudget;
     private final MpscUnboundedArrayQueue<IngestBatch> queue;
     private final Map<String, TenantBuffer> tenantBuffers = new HashMap<>();
@@ -63,7 +63,12 @@ public class IngestionEngine {
         this.metrics = metrics;
         this.clock = clock;
 
-        this.queueBudget = new ByteBudget(config.queueBytesBudget());
+        // Per-tenant slice defaults to the global cap when unconfigured,
+        // giving the same behavior as a single global ByteBudget.
+        long perTenantQueue = config.perTenantQueueBytesBudget() > 0
+                ? Math.min(config.perTenantQueueBytesBudget(), config.queueBytesBudget())
+                : config.queueBytesBudget();
+        this.queueBudget = new TenantByteBudget(config.queueBytesBudget(), perTenantQueue);
         this.bufferBudget = new ByteBudget(config.bufferBytesBudget());
         this.queue = new MpscUnboundedArrayQueue<>(1024);
 
@@ -112,16 +117,22 @@ public class IngestionEngine {
         }
         if (accepted.isEmpty()) return 0;
 
-        if (!queueBudget.tryAcquire(batchBytes)) {
+        if (!queueBudget.tryAcquire(tenantId, batchBytes)) {
             metrics.recordRejectedAdmission();
-            throw new IngestionOverloadException("Ingestion queue budget exhausted");
+            long tenantUse = queueBudget.tenantInUse(tenantId);
+            throw new IngestionOverloadException(
+                    "Ingestion queue budget exhausted (tenant=" + tenantId
+                            + " tenantInUse=" + tenantUse
+                            + " tenantCap=" + queueBudget.perTenantCapacity()
+                            + " globalInUse=" + queueBudget.globalInUse()
+                            + " globalCap=" + queueBudget.globalCapacity() + ")");
         }
 
         queue.offer(new IngestBatch(tenantId, accepted, batchBytes));
         metrics.recordAccepted(accepted.size(), batchBytes);
         acceptedRecords.addAndGet(accepted.size());
         acceptedBytes.addAndGet(batchBytes);
-        metrics.setQueueBytes(queueBudget.inUse());
+        metrics.setQueueBytes(queueBudget.globalInUse());
         return accepted.size();
     }
 
@@ -175,8 +186,8 @@ public class IngestionEngine {
 
         // Bytes are now owned by tenant buffers (and any blocks we flushed
         // above). Release the queue-budget slice for the whole batch.
-        queueBudget.release(batch.reservedBytes());
-        metrics.setQueueBytes(queueBudget.inUse());
+        queueBudget.release(batch.tenantId(), batch.reservedBytes());
+        metrics.setQueueBytes(queueBudget.globalInUse());
         metrics.setBufferBytes(bufferBudget.inUse());
     }
 
@@ -254,13 +265,13 @@ public class IngestionEngine {
     public long getPersistedBytes() { return persistedBytes.get(); }
     public boolean isPersistenceHealthy() { return persistenceHealthy; }
     public double getBufferUsagePct() { return bufferBudget.usagePct(); }
-    public double getQueueUsagePct() { return queueBudget.usagePct(); }
+    public double getQueueUsagePct() { return queueBudget.globalUsagePct(); }
 
     /** Test hook: block until the queue is empty and any in-flight batch is done. */
     public void awaitQuiescence(long timeoutMs) throws InterruptedException {
         long deadline = System.currentTimeMillis() + timeoutMs;
         while (System.currentTimeMillis() < deadline) {
-            if (queue.isEmpty() && queueBudget.inUse() == 0) return;
+            if (queue.isEmpty() && queueBudget.globalInUse() == 0) return;
             Thread.sleep(10);
         }
     }
