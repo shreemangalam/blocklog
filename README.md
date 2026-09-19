@@ -4,6 +4,8 @@
 
 Single-node prototype. Not a production database.
 
+![BlockLog architecture](docs/public/architecture.svg)
+
 ---
 
 ## What it is

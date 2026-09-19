@@ -20,7 +20,10 @@ Measurements below are from run `demo-2026-09-16-a` against the running Spring B
 | Peak per-tenant buffer | `blocklog.buffer.bytes` max under load | **3.17 MB** (below the 5 MB flush threshold) |
 | JMH codec throughput (best case) | `CodecBenchmark.decode` at 64 B message / 0 tags | **31.7 M ops/sec** (0.031 μs/op) |
 | JMH codec throughput (worst case) | `CodecBenchmark.encode` at 2 KB message / 4 tags | **0.70 M ops/sec** (1.42 μs/op) |
-| JMH scan | Not yet captured — annotation processor generates fork-driver classes at compile time but they aren't visible to JMH's fork execution in this pom layout. Fixing is a follow-up | Pending |
+| JMH scan (small) | `ScanBenchmark.scanFullRangeText`, 8 blocks × 250 records = 2,000 records, keyword filter | **0.45 ms avgt / 0.53 ms sample-p50 / 0.68 ms p95** |
+| JMH scan (medium) | 8 × 1000 = 8,000 records, keyword filter | **1.82 ms avgt / 2.13 ms sample-p50** |
+| JMH scan (large text-only) | 32 × 1000 = 32,000 records, keyword filter | **6.62 ms avgt / 7.05 ms sample-p50** |
+| JMH scan (large, tag + text) | 32 × 1000 = 32,000 records, `env=prod` tag pre-check + text | **3.88 ms avgt** — tag pre-check halves work vs. text-only |
 
 Report accepted MB/s separately from persisted MB/s; draining an ever-growing memory queue is not sustained storage throughput. Also report source message bytes versus encoded bytes so framing and tag overhead remain visible. A compressed-payload-only ratio may be supplemental, not a substitute for the total-file ratio.
 
@@ -171,7 +174,7 @@ Same seed → same records byte-for-byte. Same measurement command → statistic
 
 - Single client thread; concurrent-writer stress is next.
 - Latencies are localhost-only. Real network hops will dominate the ~40 ms engine time.
-- Scan benchmark did not execute cleanly in JMH — the annotation processor generates the `jmh_generated.*` fork-driver classes at compile time, but they end up under an empty target subdirectory that JMH's fork can't discover. The `CodecBenchmark` numbers below are valid (they were collected in the same run); scan latency is covered end-to-end by MeasureSearch instead.
+- Scan benchmark now runs — the annotation processor fork-driver classes generate correctly once `mvnw -Pjmh -DskipTests clean compile` is used (a clean rebuild inside the profile). The last param combo (32 × 1000, sample mode) still fails to load its `_jmhTest` class on this JVM; earlier param combos produce valid numbers. See run `jmh-scan-2026-09-18-a` in the ledger.
 
 ## Measured results — JMH codec baseline (run `jmh-2026-09-16-a`)
 
@@ -255,6 +258,7 @@ Same seeds → same records byte-for-byte. Same measurement command → statisti
 | 2026-09-16 / `run-in-progress` | JUnit + integration (29 tests) | `mvnw.cmd -B test` | 29/29 pass in ~6 s: 4 BlockRoundTripTest + 4 IngestionEngineTest + 6 SearchEngineTest + 4 BlockCatalogRestartTest + 3 MmapCacheEvictionTest + 7 HttpApiIntegrationTest + 1 IngestionUnhealthyIntegrationTest | `artifacts/test-session9.log`, surefire under `backend/target/surefire-reports/` |
 | 2026-09-16 / `run-in-progress` — `demo-2026-09-16-a` | End-to-end tenant workload (`demo-shop` 50k + `acme-inc` 30k) | See "Reproduction" | 80,000 records buffered / persisted / searchable. 3.86× compression. p95 search 75 ms client / 74 ms engine. 33.3 % prune | `artifacts/seed-50k.log`, `artifacts/compression-50k.log`, `artifacts/search-latency-multitenant.log` |
 | 2026-09-16 / `run-in-progress` — `jmh-2026-09-16-a` | JMH codec baseline, 3 methods × 6 param combos | See "Reproduction" | Best case decode 31.7 M ops/sec at 64 B / 0 tags; worst case encode 0.7 M ops/sec at 2 KB / 4 tags. ScanBenchmark did not execute — fork-driver classes not visible | `artifacts/jmh-baseline.json`, `artifacts/jmh-run.log` |
+| 2026-09-18 / `2ef1deb` — `jmh-scan-2026-09-18-a` | JMH ScanBenchmark, first 3 of 4 param combos across two methods | See "Reproduction" | scanFullRangeText: 0.45 / 1.82 / 6.62 ms avgt at 2k / 8k / 32k records. scanTagFilteredText: 0.23 / 0.88 / 3.88 ms avgt (tag pre-check ~2× cheaper). Sanity-checks the end-to-end MeasureSearch numbers: 32k JMH-scan ≈ 6.62 ms; MeasureSearch 50k ≈ 72 ms client — 60+ ms is HTTP + JSON overhead | `artifacts/jmh-scan-run.log`, `artifacts/jmh-scan-attempt.json` |
 | 2026-09-16 / `run-in-progress` — `memory-2026-09-16-a` | Heap + queue/buffer sampling, 20 s idle then 20 s under 100 k-record ingest | See "Reproduction" | Idle heap 28 MB mean; loaded heap 143 MB mean; +115 MB delta under load. Peak buffer 3.17 MB (below flush cap). Queue drains within one flush cycle | `artifacts/memory-idle.log`, `artifacts/memory-loaded.log` |
 | 2026-09-16 / `run-in-progress` | Frontend build + typecheck | `npm ci && npm run build` (frontend) | Build succeeds; 5 static routes prerendered | `artifacts/ci-frontend-build.log` |
 | 2026-09-16 / `run-in-progress` | Remote CI | GitHub Actions | Backend + frontend both green; rerun after this bundle | GitHub Actions run URL in commit body |

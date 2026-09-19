@@ -4,6 +4,8 @@ Status: 2026-09-18. Baseline shipped: 30 JUnit + integration tests pass, `/actua
 
 ## Architecture and ownership
 
+![Architecture](architecture.svg)
+
 ```text
 HTTP envelope validation -> bounded MPSC ring -> single ingestion owner
   -> per-tenant buffers -> bounded flush handoff -> LZ4 + CRC32

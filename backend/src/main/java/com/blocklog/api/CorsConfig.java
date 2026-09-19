@@ -13,8 +13,14 @@ public class CorsConfig {
         return new WebMvcConfigurer() {
             @Override
             public void addCorsMappings(CorsRegistry registry) {
+                // Accept any localhost port so the dev server can bind to an
+                // alternate port when 3000 is taken (Docker Desktop, other
+                // dev servers). Trusted-local sprint scope; production would
+                // pin explicit origins per environment.
                 registry.addMapping("/api/**")
-                        .allowedOrigins("http://localhost:3000")
+                        .allowedOriginPatterns(
+                                "http://localhost:*",
+                                "http://127.0.0.1:*")
                         .allowedMethods("GET", "POST", "OPTIONS")
                         .allowedHeaders("*");
             }
