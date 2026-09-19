@@ -9,6 +9,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Clock;
 import java.util.List;
@@ -92,6 +93,56 @@ class IngestionEngineTest {
         String oversized = "x".repeat(200);
         assertThrows(RecordTooLargeException.class, () ->
                 engine.ingest("tenant-a", List.of(new LogRecord(1L, Map.of(), oversized))));
+    }
+
+    @Test
+    void flushFailureLostRecordsAreCounted() throws Exception {
+        // Place a regular FILE at the dataDir path so Files.createDirectories throws.
+        // Two separate batches are needed: the first fills the buffer past flushSizeBytes;
+        // on the second batch processBatch triggers a size flush that hits the bad path.
+        Path badDataDir = tempDir.resolve("data-as-file");
+        Files.writeString(badDataDir, "not-a-directory");
+
+        EngineConfig config = new EngineConfig(
+                badDataDir.toString(), 1000, 5_000_000, 65536, 16, 256, 256, 256,
+                30, 5, 10_000, 1000, 100, 30_000, 5_000, 1, 4,
+                64L << 20, 64L << 20, 5, 256, 0L
+        );
+        BlockCatalog catalog = new BlockCatalog(10_000);
+        engine = new IngestionEngine(badDataDir, config, catalog, newMetrics(), Clock.systemUTC());
+
+        // Each record encodes to ~20 bytes; flushSizeBytes=30 triggers flush on 2nd batch.
+        engine.ingest("tenant-x", List.of(new LogRecord(1L, Map.of(), "first-record-message")));
+        engine.ingest("tenant-x", List.of(new LogRecord(2L, Map.of(), "second-triggers-flush")));
+        engine.awaitQuiescence(2000);
+
+        assertFalse(engine.isPersistenceHealthy(),
+                "engine must become unhealthy after flush failure");
+        assertTrue(engine.getLostRecords() >= 1,
+                "lost record count must be positive after a failed flush");
+    }
+
+    @Test
+    void ageFlushPersistsBufferedRecords() throws Exception {
+        // Configure a 1-second age threshold. The ageTimer sets ageTick every second;
+        // the consumer thread reads the flag and calls tickAgeFlush on the same thread.
+        // This test verifies that the single-threaded routing still delivers age flushes.
+        EngineConfig config = new EngineConfig(
+                tempDir.toString(), 1000, 5_000_000, 65536, 16, 256, 256, 256,
+                5_000_000, 1, 10_000, 1000, 100, 30_000, 5_000, 1, 4,
+                64L << 20, 64L << 20, 5, 256, 0L
+        );
+        BlockCatalog catalog = new BlockCatalog(10_000);
+        engine = new IngestionEngine(tempDir, config, catalog, newMetrics(), Clock.systemUTC());
+
+        engine.ingest("tenant-age", List.of(new LogRecord(1L, Map.of(), "age-flushed")));
+        engine.awaitQuiescence(2000);
+
+        // Wait for age timer to fire (fires every 1s; record ts=1ms is always older than threshold).
+        Thread.sleep(2500);
+
+        assertTrue(catalog.size() >= 1, "age flush must publish a block within 2x the age threshold");
+        assertEquals(1, engine.getPersistedRecords(), "persisted counter must reflect age-flushed record");
     }
 
     @Test

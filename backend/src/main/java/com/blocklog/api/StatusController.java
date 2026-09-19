@@ -31,6 +31,7 @@ public class StatusController {
                 ingestionEngine.isPersistenceHealthy() ? "healthy" : "degraded",
                 ingestionEngine.getAcceptedRecords(),
                 ingestionEngine.getPersistedRecords(),
+                ingestionEngine.getLostRecords(),
                 ingestionEngine.getAcceptedBytes(),
                 ingestionEngine.getPersistedBytes(),
                 catalog.size(),

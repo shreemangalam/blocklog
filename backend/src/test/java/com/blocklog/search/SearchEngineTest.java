@@ -139,6 +139,33 @@ class SearchEngineTest {
     }
 
     @Test
+    void earliestKOrderingCorrectWhenTimestampHasZeroMillis() throws Exception {
+        // Instant.toString() omits fractional seconds when millis == 0.
+        // "1970-01-01T00:00:01Z" vs "1970-01-01T00:00:01.001Z": '.' (46) < 'Z' (90)
+        // so the LATER record sorts lexicographically before the EARLIER one.
+        // The heap comparator must use epoch-ms, not string comparison.
+        catalog = new BlockCatalog(10_000);
+        List<LogRecord> records = List.of(
+                new LogRecord(1000L, Map.of(), "earlier"),  // millis==0 -> "T00:00:01Z"
+                new LogRecord(1001L, Map.of(), "later")     // millis==1 -> "T00:00:01.001Z"
+        );
+        Path file = BlockWriter.writeBlock(tempDir, "t1", records, "ord-block");
+        catalog.register(BlockMetadata.fromHeader("ord-block", file, BlockReader.readHeader(file)));
+
+        SearchEngine engine = new SearchEngine(catalog, 2, 4, newMetrics());
+
+        SearchResponse limitOne = engine.search("t1", 0, 10_000, null, null, 1, 5000);
+        assertEquals(1, limitOne.returned_count());
+        assertEquals("earlier", limitOne.results().get(0).message(),
+                "limit=1 must return the earliest record, not the lexicographically smallest timestamp");
+
+        SearchResponse both = engine.search("t1", 0, 10_000, null, null, 10, 5000);
+        assertEquals(2, both.returned_count());
+        assertEquals("earlier", both.results().get(0).message(), "ascending order: earlier first");
+        assertEquals("later", both.results().get(1).message(), "ascending order: later second");
+    }
+
+    @Test
     void tenantAndTimePruningAreExact() throws Exception {
         catalog = new BlockCatalog(10_000);
 

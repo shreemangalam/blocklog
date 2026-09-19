@@ -23,8 +23,8 @@ import java.util.concurrent.atomic.AtomicLong;
  *   partial response (rather than blocking indefinitely).
  * - Global scan-permit semaphore bounds concurrent per-block decompression.
  * - Deadline is checked between blocks AND periodically inside a scan.
- * - Truncation is flagged when any block generated more matches than the
- *   result heap could keep (not the buggy heap.size() >= limit heuristic).
+ * - Truncation is flagged when totalHitsSeen across all blocks exceeds the
+ *   final result set size.
  * - Cancels outstanding scans on timeout so we don't leak threads or
  *   scan-permit reservations.
  */

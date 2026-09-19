@@ -4,6 +4,7 @@ public record StatusResponse(
         String status,
         long accepted_records,
         long persisted_records,
+        long lost_records,
         long accepted_bytes,
         long persisted_bytes,
         int published_blocks,

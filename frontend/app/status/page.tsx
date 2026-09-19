@@ -95,6 +95,7 @@ export default function StatusPage() {
             <CardContent className="grid grid-cols-2 gap-3 sm:grid-cols-4">
               <Metric label="Accepted records" value={status.accepted_records} />
               <Metric label="Persisted records" value={status.persisted_records} />
+              <Metric label="Lost records" value={status.lost_records} />
               <Metric label="Accepted bytes" value={formatBytes(status.accepted_bytes)} />
               <Metric label="Persisted bytes" value={formatBytes(status.persisted_bytes)} />
             </CardContent>
@@ -114,6 +115,18 @@ export default function StatusPage() {
               <Metric label="Buffer usage" value={`${status.buffer_usage_pct.toFixed(1)}%`} />
             </CardContent>
           </Card>
+
+          {status.lost_records > 0 && (
+            <Alert variant="destructive">
+              <AlertTriangle className="size-4" />
+              <AlertTitle>{status.lost_records} record(s) lost — persistence is degraded</AlertTitle>
+              <AlertDescription>
+                A flush failed after records were accepted into memory but before they could be
+                written to disk. These records are permanently gone. Restart the backend after
+                resolving the underlying storage issue; new ingestion is rejected until healthy.
+              </AlertDescription>
+            </Alert>
+          )}
 
           {status.unavailable_blocks > 0 && (
             <Alert>

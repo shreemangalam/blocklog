@@ -31,6 +31,7 @@ export interface StatusResponse {
   status: string;
   accepted_records: number;
   persisted_records: number;
+  lost_records: number;
   accepted_bytes: number;
   persisted_bytes: number;
   published_blocks: number;
