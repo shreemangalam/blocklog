@@ -90,9 +90,8 @@ class IngestionEngineTest {
         engine = new IngestionEngine(tempDir, config, catalog, newMetrics(), Clock.systemUTC());
 
         String oversized = "x".repeat(200);
-        int accepted = engine.ingest("tenant-a", List.of(new LogRecord(1L, Map.of(), oversized)));
-
-        assertEquals(0, accepted);
+        assertThrows(RecordTooLargeException.class, () ->
+                engine.ingest("tenant-a", List.of(new LogRecord(1L, Map.of(), oversized))));
     }
 
     @Test

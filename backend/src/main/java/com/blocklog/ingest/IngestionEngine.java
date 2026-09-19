@@ -54,6 +54,8 @@ public class IngestionEngine {
 
     private volatile boolean persistenceHealthy = true;
     private final AtomicBoolean shutdown = new AtomicBoolean();
+    private final AtomicBoolean ageTick = new AtomicBoolean();
+    private final AtomicLong lostRecords = new AtomicLong();
 
     public IngestionEngine(Path dataDir, EngineConfig config, BlockCatalog catalog,
                            EngineMetrics metrics, Clock clock) {
@@ -84,7 +86,7 @@ public class IngestionEngine {
             t.setDaemon(true);
             return t;
         });
-        ageTimer.scheduleAtFixedRate(this::tickAgeFlush, 1, 1, TimeUnit.SECONDS);
+        ageTimer.scheduleAtFixedRate(() -> ageTick.set(true), 1, 1, TimeUnit.SECONDS);
     }
 
     /**
@@ -111,7 +113,10 @@ public class IngestionEngine {
         List<LogRecord> accepted = new ArrayList<>(records.size());
         for (LogRecord record : records) {
             int size = RecordCodec.encodedSize(record);
-            if (size > config.maxRecordBytes()) continue;
+            if (size > config.maxRecordBytes()) {
+                throw new RecordTooLargeException(
+                        "Encoded record size " + size + " bytes exceeds limit " + config.maxRecordBytes());
+            }
             batchBytes += size;
             accepted.add(record);
         }
@@ -139,11 +144,15 @@ public class IngestionEngine {
     private void consumeLoop() {
         while (!shutdown.get()) {
             IngestBatch batch = queue.poll();
+            if (batch != null) {
+                processBatch(batch);
+            }
+            if (ageTick.compareAndSet(true, false)) {
+                tickAgeFlush();
+            }
             if (batch == null) {
                 LockSupport_parkNanos(500_000);
-                continue;
             }
-            processBatch(batch);
         }
         drainRemaining();
     }
@@ -178,7 +187,11 @@ public class IngestionEngine {
             // normal tuning), flush and retry so we never grow past its cap.
             if (!bufferBudget.tryAcquire(size)) {
                 flushBuffer(buffer, FlushReason.SIZE);
-                bufferBudget.tryAcquire(size); // guaranteed after flush drains the tenant
+                if (!bufferBudget.tryAcquire(size)) {
+                    log.error("Buffer budget exhausted after flush; dropping record size={} tenant={}",
+                              size, buffer.tenantId());
+                    continue;
+                }
             }
 
             buffer.add(record, size, clock.millis());
@@ -234,7 +247,8 @@ public class IngestionEngine {
             log.info("Flushed block {} tenant={} records={} reason={}",
                     blockId, tenantId, records, reason);
         } catch (Exception e) {
-            log.error("Flush failed for tenant {}", tenantId, e);
+            lostRecords.addAndGet(records);
+            log.error("Flush failed for tenant {}; {} records lost (no WAL)", tenantId, records, e);
             metrics.recordFlushFailure();
             persistenceHealthy = false;
         } finally {
@@ -263,6 +277,7 @@ public class IngestionEngine {
     public long getAcceptedBytes() { return acceptedBytes.get(); }
     public long getPersistedRecords() { return persistedRecords.get(); }
     public long getPersistedBytes() { return persistedBytes.get(); }
+    public long getLostRecords() { return lostRecords.get(); }
     public boolean isPersistenceHealthy() { return persistenceHealthy; }
     public double getBufferUsagePct() { return bufferBudget.usagePct(); }
     public double getQueueUsagePct() { return queueBudget.globalUsagePct(); }

@@ -3,6 +3,7 @@ package com.blocklog.api;
 import com.blocklog.ingest.IngestionEngine;
 import com.blocklog.ingest.IngestionOverloadException;
 import com.blocklog.ingest.IngestionUnavailableException;
+import com.blocklog.ingest.RecordTooLargeException;
 import com.blocklog.model.*;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -49,6 +50,8 @@ public class LogController {
         try {
             int accepted = ingestionEngine.ingest(request.tenant_id(), records);
             return ResponseEntity.status(HttpStatus.ACCEPTED).body(IngestResponse.buffered(accepted));
+        } catch (RecordTooLargeException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         } catch (IngestionOverloadException e) {
             return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
                     .body(Map.of("error", e.getMessage()));

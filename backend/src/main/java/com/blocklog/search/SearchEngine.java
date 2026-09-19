@@ -74,7 +74,8 @@ public class SearchEngine {
 
             PriorityQueue<SearchResponse.SearchHit> resultHeap = new PriorityQueue<>(
                     Math.max(limit, 1) + 1,
-                    Comparator.comparing(SearchResponse.SearchHit::timestamp).reversed()
+                    Comparator.<SearchResponse.SearchHit>comparingLong(
+                            h -> Instant.parse(h.timestamp()).toEpochMilli()).reversed()
             );
 
             boolean timedOut = false;
@@ -128,7 +129,7 @@ public class SearchEngine {
             }
 
             List<SearchResponse.SearchHit> sorted = new ArrayList<>(resultHeap);
-            sorted.sort(Comparator.comparing(SearchResponse.SearchHit::timestamp));
+            sorted.sort(Comparator.comparingLong(h -> Instant.parse(h.timestamp()).toEpochMilli()));
 
             boolean truncated = totalHitsSeen.get() > sorted.size();
             boolean partial = timedOut

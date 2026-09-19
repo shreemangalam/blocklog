@@ -5,7 +5,7 @@
 &nbsp;![Spring Boot](https://img.shields.io/badge/Spring_Boot-3.4-brightgreen?logo=springboot&logoColor=white)
 &nbsp;![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=next.js&logoColor=white)
 
-**A log storage engine that skips the index.** Records land in LZ4-compressed immutable blocks on disk. Searches prune over 90% of blocks using a small in-memory catalog before reading a single byte, then scan the survivors in parallel using Java virtual threads with nanosecond deadlines. Every response names exactly what it saw — candidate blocks, scanned blocks, blocks that failed CRC verification, and whether the result is partial.
+**A log storage engine that skips the index.** Records land in LZ4-compressed immutable blocks on disk. Searches prune blocks using a small in-memory catalog before reading a single byte, then scan the survivors in parallel using Java virtual threads with nanosecond deadlines. Every response names exactly what it saw — candidate blocks, scanned blocks, blocks that failed CRC verification, and whether the result is partial.
 
 Single-node prototype. Not a production database.
 
@@ -56,7 +56,7 @@ Requires JDK 21 (Temurin) and Node 20+.
 
 ```bash
 # Terminal 1 — backend API on :8080
-cd backend && ./mvnw -q spring-boot:run
+cd backend && mvnw.cmd -q spring-boot:run   # Windows; use ./mvnw on Linux/macOS
 
 # Terminal 2 — frontend on :3000
 cd frontend && npm ci && npm run dev
@@ -84,7 +84,7 @@ ls data/*.blk
 java -cp target/classes com.blocklog.demo.CorruptBlock --file data/<uuid>.blk
 
 # 3. Restart the backend so the catalog rebuilds from disk
-./mvnw -q spring-boot:run
+mvnw.cmd -q spring-boot:run
 
 # 4. Search across the corrupted block's time range
 curl -s -X POST http://localhost:8080/api/v1/search \

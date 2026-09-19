@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -175,9 +176,9 @@ class ReferenceScanEquivalenceTest {
                     "repeated searches on an unchanged corpus must return identical ordering");
         }
 
-        // And the ordering must be by ascending timestamp per the contract.
+        // And the ordering must be by ascending timestamp (epoch-ms, not string) per the contract.
         List<String> expected = new ArrayList<>(firstOrder);
-        expected.sort(Comparator.comparing(s -> s.split("\\|")[0]));
+        expected.sort(Comparator.comparingLong(s -> Instant.parse(s.split("\\|")[0]).toEpochMilli()));
         assertEquals(expected, firstOrder,
                 "results must be earliest-first by timestamp");
     }

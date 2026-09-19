@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
@@ -233,7 +234,7 @@ export default function HelpPage() {
             walks through a three-step ingest and search flow against the real backend.
           </li>
           <li>
-            <a href="/" className="text-primary underline underline-offset-2">Search</a> is the
+            <Link href="/" className="text-primary underline underline-offset-2">Search</Link> is the
             structured query surface, with a Natural Language tab for translated queries.
           </li>
           <li>

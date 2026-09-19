@@ -44,13 +44,43 @@ export function SearchResults({ loading, error, response }: SearchResultsProps) 
   }
 
   if (response.returned_count === 0) {
+    const hasWarnings = response.partial || response.timed_out
+      || response.skipped_blocks > 0 || response.unavailable_blocks > 0;
     return (
-      <div className="flex flex-col items-center gap-2 rounded-lg border border-dashed border-border py-12 text-center text-muted-foreground">
-        <Inbox className="size-8" />
-        <p className="text-sm">No matching records for this query.</p>
-        {response.candidate_blocks === 0 && (
-          <p className="text-xs">No blocks matched this tenant/time range. Check tenant ID and range.</p>
+      <div className="space-y-3">
+        {hasWarnings && (
+          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            <span className="flex items-center gap-1">
+              <Clock className="size-3.5" />
+              {response.elapsed_ms}ms
+            </span>
+            <span>·</span>
+            <span>{response.scanned_blocks}/{response.candidate_blocks} blocks scanned</span>
+            {response.partial && (
+              <Badge variant="outline" className="border-amber-500 text-amber-700">Partial results</Badge>
+            )}
+            {response.timed_out && (
+              <Badge variant="outline" className="border-amber-500 text-amber-700">Timed out</Badge>
+            )}
+            {response.skipped_blocks > 0 && (
+              <Badge variant="outline" className="border-destructive text-destructive">
+                {response.skipped_blocks} block(s) skipped
+              </Badge>
+            )}
+            {response.unavailable_blocks > 0 && (
+              <Badge variant="outline" className="border-destructive text-destructive">
+                {response.unavailable_blocks} block(s) unavailable
+              </Badge>
+            )}
+          </div>
         )}
+        <div className="flex flex-col items-center gap-2 rounded-lg border border-dashed border-border py-12 text-center text-muted-foreground">
+          <Inbox className="size-8" />
+          <p className="text-sm">No matching records for this query.</p>
+          {response.candidate_blocks === 0 && (
+            <p className="text-xs">No blocks matched this tenant/time range. Check tenant ID and range.</p>
+          )}
+        </div>
       </div>
     );
   }

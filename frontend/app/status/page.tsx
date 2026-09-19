@@ -29,8 +29,7 @@ export default function StatusPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const refresh = useCallback(async () => {
-    setLoading(true);
+  const fetchData = useCallback(async () => {
     try {
       const result = await getStatus();
       setStatus(result);
@@ -42,11 +41,18 @@ export default function StatusPage() {
     }
   }, []);
 
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    await fetchData();
+  }, [fetchData]);
+
   useEffect(() => {
-    refresh();
-    const interval = setInterval(refresh, 5000);
+    // All setState calls inside fetchData happen after `await getStatus()` — not synchronous.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void fetchData();
+    const interval = setInterval(() => void fetchData(), 5000);
     return () => clearInterval(interval);
-  }, [refresh]);
+  }, [fetchData]);
 
   return (
     <div className="mx-auto max-w-6xl space-y-6 px-4 py-8 sm:px-6">

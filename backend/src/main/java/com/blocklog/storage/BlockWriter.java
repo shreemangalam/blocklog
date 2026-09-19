@@ -39,12 +39,15 @@ public final class BlockWriter {
             if (record.timestamp() > maxTs) maxTs = record.timestamp();
             if (!tagsSaturated) {
                 for (var entry : record.tags().entrySet()) {
-                    tagSummary.computeIfAbsent(entry.getKey(), k -> new LinkedHashSet<>()).add(entry.getValue());
-                    totalTagPairs++;
-                    if (totalTagPairs > BlockHeader.MAX_TAG_SUMMARY_PAIRS) {
-                        tagsSaturated = true;
-                        tagSummary.clear();
-                        break;
+                    boolean added = tagSummary.computeIfAbsent(
+                            entry.getKey(), k -> new LinkedHashSet<>()).add(entry.getValue());
+                    if (added) {
+                        totalTagPairs++;
+                        if (totalTagPairs > BlockHeader.MAX_TAG_SUMMARY_PAIRS) {
+                            tagsSaturated = true;
+                            tagSummary.clear();
+                            break;
+                        }
                     }
                 }
             }
