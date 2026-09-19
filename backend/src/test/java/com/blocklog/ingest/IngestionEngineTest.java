@@ -146,6 +146,38 @@ class IngestionEngineTest {
     }
 
     @Test
+    void bufferBudgetExhaustionCountsLostRecordsAndIsObservable() throws Exception {
+        // bufferBudget=10 bytes is smaller than any single record's encoded size (~15+ bytes).
+        // Both records are accepted into the queue budget (HTTP 202 already sent) but cannot
+        // transfer to the buffer budget. Previously they were silently dropped; this test guards
+        // that they must be counted as lost and the engine must degrade visibly.
+        EngineConfig config = new EngineConfig(
+                tempDir.toString(), 1000, 5_000_000, 65536, 16, 256, 256, 256,
+                5_000_000, 60, 10_000, 1000, 100, 30_000, 5_000, 1, 4,
+                1000L, 10L, 5, 256, 0L
+        );
+        BlockCatalog catalog = new BlockCatalog(10_000);
+        IngestionEngine testEngine = new IngestionEngine(tempDir, config, catalog, newMetrics(), Clock.systemUTC());
+
+        testEngine.ingest("tenant-a", List.of(
+                new LogRecord(1L, Map.of(), "first"),
+                new LogRecord(2L, Map.of(), "second")
+        ));
+        testEngine.awaitQuiescence(2000);
+        testEngine.shutdown();
+
+        assertEquals(2, testEngine.getAcceptedRecords(),
+                "both records should be accepted into the queue");
+        assertEquals(testEngine.getAcceptedRecords(),
+                testEngine.getPersistedRecords() + testEngine.getLostRecords(),
+                "accounting invariant: accepted == persisted + lost; no silent drops allowed");
+        assertTrue(testEngine.getLostRecords() > 0,
+                "records that cannot enter the buffer budget must be counted as lost");
+        assertFalse(testEngine.isPersistenceHealthy(),
+                "engine must become unhealthy when records are silently dropped");
+    }
+
+    @Test
     void rejectsWhenQueueBudgetExhausted() throws Exception {
         // Tiny queue budget so a single record fills it.
         EngineConfig config = new EngineConfig(

@@ -188,7 +188,10 @@ public class IngestionEngine {
             if (!bufferBudget.tryAcquire(size)) {
                 flushBuffer(buffer, FlushReason.SIZE);
                 if (!bufferBudget.tryAcquire(size)) {
-                    log.error("Buffer budget exhausted after flush; dropping record size={} tenant={}",
+                    lostRecords.incrementAndGet();
+                    persistenceHealthy = false;
+                    metrics.recordFlushFailure();
+                    log.error("Buffer budget exhausted after flush; record lost size={} tenant={}",
                               size, buffer.tenantId());
                     continue;
                 }
