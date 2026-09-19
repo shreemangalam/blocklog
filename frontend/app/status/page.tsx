@@ -47,7 +47,7 @@ export default function StatusPage() {
   }, [fetchData]);
 
   useEffect(() => {
-    // All setState calls inside fetchData happen after `await getStatus()` — not synchronous.
+    // All setState calls inside fetchData happen after `await getStatus()`, not synchronously.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void fetchData();
     const interval = setInterval(() => void fetchData(), 5000);
@@ -119,7 +119,7 @@ export default function StatusPage() {
           {status.lost_records > 0 && (
             <Alert variant="destructive">
               <AlertTriangle className="size-4" />
-              <AlertTitle>{status.lost_records} record(s) lost — persistence is degraded</AlertTitle>
+              <AlertTitle>{status.lost_records} record(s) lost: persistence is degraded</AlertTitle>
               <AlertDescription>
                 A flush failed after records were accepted into memory but before they could be
                 written to disk. These records are permanently gone. Restart the backend after

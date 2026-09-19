@@ -1,6 +1,6 @@
 # BlockLog: Functional Design
 
-Status: 2026-09-18. This document describes shipped behavior; sections that still name unbuilt items are marked "proposed" or "deferred" explicitly. 31 JUnit + integration tests, four measured metrics (see [testing evidence](testing-evidence.md)), and both `main` and `test` branches are CI-green. Flush boundary semantics resolved (record-aligned, see [technical design](technical-design.md)).
+Status: 2026-09-19. This document describes shipped behavior; sections that still name unbuilt items are marked "proposed" or "deferred" explicitly. 39 JUnit + integration tests, four measured metrics (see [testing evidence](testing-evidence.md)), and `main` is CI-green. Flush boundary semantics resolved (record-aligned, see [technical design](technical-design.md)).
 
 ## Purpose
 
@@ -50,7 +50,7 @@ Return `400` for invalid fields, `413` for size limits, `429` for temporary admi
 
 ## Natural-language query mode (shipped, inert without an API key)
 
-The frontend provides an alternative search input where the user types a plain-English query instead of filling out the structured form. The translation logic (`frontend/lib/use-nl-search.ts`), the query preview card, and all failure-handling paths are shipped. Live translation is gated on `NEXT_PUBLIC_ANTHROPIC_API_KEY` being set at build time; without it, the NL tab shows a "Coming in a future version" panel and never issues a network call. The structured form remains the default mode either way — the project functions completely without NL search.
+The frontend provides an alternative search input where the user types a plain-English query instead of filling out the structured form. The translation logic (`frontend/lib/use-nl-search.ts`), the query preview card, and all failure-handling paths are shipped. Live translation is gated on `NEXT_PUBLIC_ANTHROPIC_API_KEY` being set at build time; without it, the NL tab shows a "Coming in a future version" panel and never issues a network call. The structured form remains the default mode either way; the project functions completely without NL search.
 
 ### Flow
 
@@ -97,6 +97,6 @@ The frontend provides an alternative search input where the user types a plain-E
 | 5 | Damaged payloads/headers cannot silently imply complete results | ✅ `BlockCatalogRestartTest.corruptBlockFileIsRegisteredAsUnavailable`, `.payloadCorruptionIsSurfacedOnMappingLoad`, plus the `CorruptBlock` demo CLI for operator-facing evidence |
 | 6 | Concurrency, buffering, metadata, and results have configured limits and observable overload behavior | ✅ `SearchEngineTest.queryReturnsTimedOutInsteadOfBlockingUnderScanPermitStarvation`, `.truncationFlaggedWhenMoreMatchesThanLimit`, `MmapCacheEvictionTest` (bounded mmap), `ConcurrentWriterStressTest` (4000-record conservation with 4 concurrent searchers, no permit leaks) |
 | 7 | The interface works against the real API and includes loading, empty, failure, overload, and partial-result states | ✅ `HttpApiIntegrationTest` (7 tests), plus manual walkthrough of `/`, `/status`, `/help`, `/onboarding` against a live backend (recorded in session 6) |
-| 8 | Structured and NL searches produce identical results for equivalent queries | Design contract holds — both paths call the same `/api/v1/search`. Live NL translation quality is untestable without an API key configured |
+| 8 | Structured and NL searches produce identical results for equivalent queries | Design contract holds (both paths call the same `/api/v1/search`). Live NL translation quality is untestable without an API key configured |
 | 9 | NL search fails gracefully on LLM timeout, network error, or invalid model output | ✅ Failure-handling code paths ship in `use-nl-search.ts`. End-to-end verification depends on an API key being present; automated coverage with a mocked LLM is a follow-up |
 | 10 | All four headline metrics have reproducible evidence, or are explicitly marked unmeasured | ✅ Ingestion 31,210 r/s, compression 3.86×, search p95 75 ms client / 74 ms engine, heap idle-to-loaded 28→143 MB. Full bundle in [testing evidence](testing-evidence.md). JMH scan-side numbers still pending (fork classpath issue) |

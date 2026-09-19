@@ -1,6 +1,6 @@
 # BlockLog: Technical Design
 
-Status: 2026-09-18. Baseline shipped: 30 JUnit + integration tests pass, `/actuator/prometheus` is live, and the four sprint metrics have measured numbers in [testing evidence](testing-evidence.md). Flush semantics resolved. This document describes what the engine currently implements; sections that still describe design candidates are marked "proposed" explicitly.
+Status: 2026-09-19. Baseline shipped: 39 JUnit + integration tests pass, `/actuator/prometheus` is live, and the four sprint metrics have measured numbers in [testing evidence](testing-evidence.md). Flush semantics resolved. This document describes what the engine currently implements; sections that still describe design candidates are marked "proposed" explicitly.
 
 ## Architecture and ownership
 

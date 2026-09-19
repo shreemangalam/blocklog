@@ -1,6 +1,6 @@
-# BlockLog: Testing Evidence
+﻿# BlockLog: Testing Evidence
 
-Status: 2026-09-16. Correctness suite (**29 tests**) is green, plus three measurement bundles now published: end-to-end tenant workload (`demo-2026-09-16-a`), JMH codec baseline (`jmh-2026-09-16-a`), and memory overhead (`memory-2026-09-16-a`). All four sprint metrics now have numbers. Replace pending entries only with actual saved results.
+Status: 2026-09-19. Correctness suite (**39 tests**) is green, plus three measurement bundles now published: end-to-end tenant workload (`demo-2026-09-16-a`), JMH codec baseline (`jmh-2026-09-16-a`), and memory overhead (`memory-2026-09-16-a`). All four sprint metrics now have numbers. Replace pending entries only with actual saved results.
 
 ## Headline measurements
 
@@ -23,7 +23,7 @@ Measurements below are from run `demo-2026-09-16-a` against the running Spring B
 | JMH scan (small) | `ScanBenchmark.scanFullRangeText`, 8 blocks × 250 records = 2,000 records, keyword filter | **0.45 ms avgt / 0.53 ms sample-p50 / 0.68 ms p95** |
 | JMH scan (medium) | 8 × 1000 = 8,000 records, keyword filter | **1.82 ms avgt / 2.13 ms sample-p50** |
 | JMH scan (large text-only) | 32 × 1000 = 32,000 records, keyword filter | **6.62 ms avgt / 7.05 ms sample-p50** |
-| JMH scan (large, tag + text) | 32 × 1000 = 32,000 records, `env=prod` tag pre-check + text | **3.88 ms avgt** — tag pre-check halves work vs. text-only |
+| JMH scan (large, tag + text) | 32 × 1000 = 32,000 records, `env=prod` tag pre-check + text | **3.88 ms avgt** (tag pre-check halves work vs. text-only) |
 
 Report accepted MB/s separately from persisted MB/s; draining an ever-growing memory queue is not sustained storage throughput. Also report source message bytes versus encoded bytes so framing and tag overhead remain visible. A compressed-payload-only ratio may be supplemental, not a substitute for the total-file ratio.
 
@@ -97,7 +97,7 @@ Until these harnesses exist, there are no valid project benchmark commands. Day 
 - Save full baseline/final measurements on the same recorded machine. Establish numeric performance targets from the first valid baseline before tuning; do not retroactively invent a passing target.
 - Record actual command, exit code, test counts, failures/skips, artifact paths, and remaining limitations. Documentation-only changes require link/content checks, not invented module benchmarks.
 
-## Measured results — run `demo-2026-09-16-a`
+## Measured results: run `demo-2026-09-16-a`
 
 Reproducible synthetic workload against two tenants. Full raw output in `artifacts/`.
 
@@ -139,7 +139,7 @@ Both runs single-client-thread over localhost HTTP with `POST /api/v1/logs`. Zer
 | `level=ERROR` + keyword | 45 | 44 | 47 | 50 | 42 | 44 | 48 | 33.3 % |
 | **All classes** | **300** | **44** | **75** | **81** | **42** | **74** | **79** | **33.3 %** |
 
-Prune rate is `(total_blocks − candidate_blocks) / total_blocks`. The 33.3 % rate is the `acme-inc` block being pruned from every `demo-shop` query (1 of 3 blocks). Within `demo-shop`, both remaining blocks span the full 24 h window and contain every level (uniform random sampling), so no further tenant-internal pruning fires — a workload-shape observation, not an engine limit.
+Prune rate is `(total_blocks − candidate_blocks) / total_blocks`. The 33.3 % rate is the `acme-inc` block being pruned from every `demo-shop` query (1 of 3 blocks). Within `demo-shop`, both remaining blocks span the full 24 h window and contain every level (uniform random sampling), so no further tenant-internal pruning fires. This is a workload-shape observation, not an engine limit.
 
 **Correctness sanity**
 
@@ -156,11 +156,11 @@ Every query returned real records with the expected filter effect. Sample of `ta
 **Reproduction**
 
 ```powershell
-# Terminal 1 — backend
+# Terminal 1: backend
 cd backend
 .\mvnw.cmd -q spring-boot:run
 
-# Terminal 2 — seed + measure
+# Terminal 2: seed + measure
 cd backend
 java -cp target/classes com.blocklog.demo.SyntheticIngest --tenant demo-shop --count 50000 --batch 100 --hours 24
 java -cp target/classes com.blocklog.demo.SyntheticIngest --tenant acme-inc  --count 30000 --batch 100 --hours 24 --seed 99
@@ -174,9 +174,9 @@ Same seed → same records byte-for-byte. Same measurement command → statistic
 
 - Single client thread; concurrent-writer stress is next.
 - Latencies are localhost-only. Real network hops will dominate the ~40 ms engine time.
-- Scan benchmark now runs — the annotation processor fork-driver classes generate correctly once `mvnw -Pjmh -DskipTests clean compile` is used (a clean rebuild inside the profile). The last param combo (32 × 1000, sample mode) still fails to load its `_jmhTest` class on this JVM; earlier param combos produce valid numbers. See run `jmh-scan-2026-09-18-a` in the ledger.
+- Scan benchmark now runs. The annotation processor fork-driver classes generate correctly once `mvnw -Pjmh -DskipTests clean compile` is used (a clean rebuild inside the profile). The last param combo (32 × 1000, sample mode) still fails to load its `_jmhTest` class on this JVM; earlier param combos produce valid numbers. See run `jmh-scan-2026-09-18-a` in the ledger.
 
-## Measured results — JMH codec baseline (run `jmh-2026-09-16-a`)
+## Measured results: JMH codec baseline (run `jmh-2026-09-16-a`)
 
 Single fork, 2 × 1 s warmup, 3 × 1 s measurement per param combo. Full JSON in `artifacts/jmh-baseline.json`, human-readable log in `artifacts/jmh-run.log`.
 
@@ -199,13 +199,13 @@ Parameters: `messageBytes ∈ {64, 512, 2048}`, `tagCount ∈ {0, 4}`.
 | CodecBenchmark.roundTrip | 64 | 0 | thrpt | 8.31 | 1.76 |
 | CodecBenchmark.roundTrip | 2048 | 4 | thrpt | 0.46 | 0.07 |
 
-**Sanity check against MeasureSearch**: a 500-byte log record at 4 tags round-trips at ~1.13 M ops/sec = ~880 ns / record. For a 50 k-record block that would be ~44 ms of pure codec time — matching the ~72 ms full-tenant scan p50 with LZ4 decompression and mmap traversal accounted for.
+**Sanity check against MeasureSearch**: a 500-byte log record at 4 tags round-trips at ~1.13 M ops/sec = ~880 ns / record. For a 50 k-record block that would be ~44 ms of pure codec time, matching the ~72 ms full-tenant scan p50 with LZ4 decompression and mmap traversal accounted for.
 
 Confidence bars are wide (± errors of 50 %+ for the fastest benchmarks) because the run used tight 1 s iterations to fit inside this session. Publishing at reduced iteration count is a documented tradeoff (`docs/private/daily-worklog.md`, session 9); a longer run with 3 s iterations x 5 measurement passes is the follow-up.
 
-## Measured results — Memory overhead (run `memory-2026-09-16-a`)
+## Measured results: Memory overhead (run `memory-2026-09-16-a`)
 
-Backend restarted clean before sampling. Each sample fetches `/actuator/metrics/{jvm.memory.used, jvm.memory.committed, jvm.buffer.memory.used}` via HTTP. 20 s sampling window at 500 ms intervals (40 samples each). No searches during either window — search-side mmap allocation would be an additive term captured in a later run.
+Backend restarted clean before sampling. Each sample fetches `/actuator/metrics/{jvm.memory.used, jvm.memory.committed, jvm.buffer.memory.used}` via HTTP. 20 s sampling window at 500 ms intervals (40 samples each). No searches during either window; search-side mmap allocation would be an additive term captured in a later run.
 
 | Metric | Idle min | Idle max | Idle mean | Loaded min | Loaded max | Loaded mean | Delta (mean) |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -224,24 +224,24 @@ Loaded workload was 100,000 synthetic records ingested at ~30 k r/s (SyntheticIn
 ## Reproduction
 
 ```powershell
-# Terminal 1 — backend (make sure data-dir is clean)
+# Terminal 1: backend (make sure data-dir is clean)
 Remove-Item -Recurse -Force backend/data ; New-Item -ItemType Directory backend/data
 cd backend
 .\mvnw.cmd -q spring-boot:run
 
-# Terminal 2 — end-to-end bundle
+# Terminal 2: end-to-end bundle
 cd backend
 java -cp target/classes com.blocklog.demo.SyntheticIngest --tenant demo-shop --count 50000 --batch 100 --hours 24
 java -cp target/classes com.blocklog.demo.SyntheticIngest --tenant acme-inc  --count 30000 --batch 100 --hours 24 --seed 99
 java -cp target/classes com.blocklog.demo.MeasureCompression --data-dir data --url http://localhost:8080
 java -cp target/classes com.blocklog.demo.MeasureSearch --tenant demo-shop --warmup 30 --iterations 300 --hours 24
 
-# Terminal 2 (later) — memory: idle sample first, then a load-vs-sample overlap
+# Terminal 2 (later): memory: idle sample first, then a load-vs-sample overlap
 java -cp target/classes com.blocklog.demo.MeasureMemory --seconds 20 --interval 500
 Start-Job { java -cp target/classes com.blocklog.demo.SyntheticIngest --tenant mem-load --count 100000 --batch 100 --seed 111 }
 java -cp target/classes com.blocklog.demo.MeasureMemory --seconds 20 --interval 500
 
-# Terminal 2 — JMH baseline
+# Terminal 2: JMH baseline
 .\mvnw.cmd -B -Pjmh -DskipTests clean compile
 .\mvnw.cmd -B -Pjmh -DskipTests dependency:build-classpath "-Dmdep.outputFile=cp.txt"
 $cp = "target\classes;" + (Get-Content cp.txt)
@@ -256,9 +256,9 @@ Same seeds → same records byte-for-byte. Same measurement command → statisti
 | --- | --- | --- | --- | --- |
 | 2026-09-12 / no repository initialized | Initial structure audit | Filesystem, placeholder, and PATH inspection | Skeleton only; no runnable build | No runtime evidence |
 | 2026-09-16 / `run-in-progress` | JUnit + integration (29 tests) | `mvnw.cmd -B test` | 29/29 pass in ~6 s: 4 BlockRoundTripTest + 4 IngestionEngineTest + 6 SearchEngineTest + 4 BlockCatalogRestartTest + 3 MmapCacheEvictionTest + 7 HttpApiIntegrationTest + 1 IngestionUnhealthyIntegrationTest | `artifacts/test-session9.log`, surefire under `backend/target/surefire-reports/` |
-| 2026-09-16 / `run-in-progress` — `demo-2026-09-16-a` | End-to-end tenant workload (`demo-shop` 50k + `acme-inc` 30k) | See "Reproduction" | 80,000 records buffered / persisted / searchable. 3.86× compression. p95 search 75 ms client / 74 ms engine. 33.3 % prune | `artifacts/seed-50k.log`, `artifacts/compression-50k.log`, `artifacts/search-latency-multitenant.log` |
-| 2026-09-16 / `run-in-progress` — `jmh-2026-09-16-a` | JMH codec baseline, 3 methods × 6 param combos | See "Reproduction" | Best case decode 31.7 M ops/sec at 64 B / 0 tags; worst case encode 0.7 M ops/sec at 2 KB / 4 tags. ScanBenchmark did not execute — fork-driver classes not visible | `artifacts/jmh-baseline.json`, `artifacts/jmh-run.log` |
-| 2026-09-18 / `2ef1deb` — `jmh-scan-2026-09-18-a` | JMH ScanBenchmark, first 3 of 4 param combos across two methods | See "Reproduction" | scanFullRangeText: 0.45 / 1.82 / 6.62 ms avgt at 2k / 8k / 32k records. scanTagFilteredText: 0.23 / 0.88 / 3.88 ms avgt (tag pre-check ~2× cheaper). Sanity-checks the end-to-end MeasureSearch numbers: 32k JMH-scan ≈ 6.62 ms; MeasureSearch 50k ≈ 72 ms client — 60+ ms is HTTP + JSON overhead | `artifacts/jmh-scan-run.log`, `artifacts/jmh-scan-attempt.json` |
-| 2026-09-16 / `run-in-progress` — `memory-2026-09-16-a` | Heap + queue/buffer sampling, 20 s idle then 20 s under 100 k-record ingest | See "Reproduction" | Idle heap 28 MB mean; loaded heap 143 MB mean; +115 MB delta under load. Peak buffer 3.17 MB (below flush cap). Queue drains within one flush cycle | `artifacts/memory-idle.log`, `artifacts/memory-loaded.log` |
+| 2026-09-16 / `run-in-progress` (demo-2026-09-16-a) | End-to-end tenant workload (`demo-shop` 50k + `acme-inc` 30k) | See "Reproduction" | 80,000 records buffered / persisted / searchable. 3.86× compression. p95 search 75 ms client / 74 ms engine. 33.3 % prune | `artifacts/seed-50k.log`, `artifacts/compression-50k.log`, `artifacts/search-latency-multitenant.log` |
+| 2026-09-16 / `run-in-progress` (jmh-2026-09-16-a) | JMH codec baseline, 3 methods × 6 param combos | See "Reproduction" | Best case decode 31.7 M ops/sec at 64 B / 0 tags; worst case encode 0.7 M ops/sec at 2 KB / 4 tags. ScanBenchmark did not execute; fork-driver classes not visible | `artifacts/jmh-baseline.json`, `artifacts/jmh-run.log` |
+| 2026-09-18 / `2ef1deb` (jmh-scan-2026-09-18-a) | JMH ScanBenchmark, first 3 of 4 param combos across two methods | See "Reproduction" | scanFullRangeText: 0.45 / 1.82 / 6.62 ms avgt at 2k / 8k / 32k records. scanTagFilteredText: 0.23 / 0.88 / 3.88 ms avgt (tag pre-check ~2× cheaper). Sanity-checks the end-to-end MeasureSearch numbers: 32k JMH-scan ≈ 6.62 ms; MeasureSearch 50k ≈ 72 ms client; 60+ ms is HTTP + JSON overhead | `artifacts/jmh-scan-run.log`, `artifacts/jmh-scan-attempt.json` |
+| 2026-09-16 / `run-in-progress` (memory-2026-09-16-a) | Heap + queue/buffer sampling, 20 s idle then 20 s under 100 k-record ingest | See "Reproduction" | Idle heap 28 MB mean; loaded heap 143 MB mean; +115 MB delta under load. Peak buffer 3.17 MB (below flush cap). Queue drains within one flush cycle | `artifacts/memory-idle.log`, `artifacts/memory-loaded.log` |
 | 2026-09-16 / `run-in-progress` | Frontend build + typecheck | `npm ci && npm run build` (frontend) | Build succeeds; 5 static routes prerendered | `artifacts/ci-frontend-build.log` |
 | 2026-09-16 / `run-in-progress` | Remote CI | GitHub Actions | Backend + frontend both green; rerun after this bundle | GitHub Actions run URL in commit body |
