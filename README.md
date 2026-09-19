@@ -38,7 +38,7 @@ Full commands and interpretation in [`docs/public/testing-evidence.md`](docs/pub
 | Search p99 | 81 ms / 79 ms |
 | Memory (idle to loaded) | 28 MB heap up to 143 MB under 100k record ingest |
 | JMH codec throughput | **31.7M decode ops/sec** at 64 bytes, 0 tags |
-| Test suite | **40 tests** passing (round-trip codec, restart discovery, corruption injection, mmap eviction, deadline enforcement, concurrent writers, cross-tenant isolation, error surface) |
+| Test suite | **42 tests** passing (round-trip codec, restart discovery, corruption injection, mmap eviction, deadline enforcement, concurrent writers, cross-tenant isolation, input validation, error surface) |
 
 ---
 
@@ -58,7 +58,7 @@ Requires JDK 21 (Temurin) and Node 20+.
 
 ```bash
 # Terminal 1: backend API on :8080
-cd backend && mvnw.cmd -q spring-boot:run   # Windows; use ./mvnw on Linux/macOS
+cd backend && mvnw.cmd -q spring-boot:run   # Windows; use mvn on Linux/macOS
 
 # Terminal 2: frontend on :3000
 cd frontend && npm ci && npm run dev

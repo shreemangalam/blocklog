@@ -13,6 +13,7 @@ import org.slf4j.LoggerFactory;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -47,6 +48,14 @@ public class SearchEngine {
         metrics.setScanPermitsFree(scanPermits.availablePermits());
     }
 
+    private record ScoredHit(long timestampMs, String blockId, int recordIndex,
+                              SearchResponse.SearchHit hit) {}
+
+    private static final Comparator<ScoredHit> SCORED_HIT_ASC = Comparator
+            .comparingLong(ScoredHit::timestampMs)
+            .thenComparing(ScoredHit::blockId)
+            .thenComparingInt(ScoredHit::recordIndex);
+
     public SearchResponse search(String tenantId, long fromMs, long toMs,
                                   Map<String, String> tags, String text,
                                   int limit, long timeoutMs) {
@@ -72,10 +81,9 @@ public class SearchEngine {
             AtomicInteger skippedBlocks = new AtomicInteger();
             AtomicLong totalHitsSeen = new AtomicLong();
 
-            PriorityQueue<SearchResponse.SearchHit> resultHeap = new PriorityQueue<>(
+            PriorityQueue<ScoredHit> resultHeap = new PriorityQueue<>(
                     Math.max(limit, 1) + 1,
-                    Comparator.<SearchResponse.SearchHit>comparingLong(
-                            h -> Instant.parse(h.timestamp()).toEpochMilli()).reversed()
+                    SCORED_HIT_ASC.reversed()
             );
 
             boolean timedOut = false;
@@ -104,8 +112,8 @@ public class SearchEngine {
                         }
                         scannedBlocks.incrementAndGet();
                         totalHitsSeen.addAndGet(outcome.hits().size());
-                        for (SearchResponse.SearchHit hit : outcome.hits()) {
-                            resultHeap.offer(hit);
+                        for (ScoredHit scored : outcome.hits()) {
+                            resultHeap.offer(scored);
                             if (resultHeap.size() > limit) {
                                 resultHeap.poll();
                             }
@@ -128,10 +136,13 @@ public class SearchEngine {
                 }
             }
 
-            List<SearchResponse.SearchHit> sorted = new ArrayList<>(resultHeap);
-            sorted.sort(Comparator.comparingLong(h -> Instant.parse(h.timestamp()).toEpochMilli()));
+            List<ScoredHit> sorted = new ArrayList<>(resultHeap);
+            sorted.sort(SCORED_HIT_ASC);
 
-            boolean truncated = totalHitsSeen.get() > sorted.size();
+            List<SearchResponse.SearchHit> results = new ArrayList<>(sorted.size());
+            for (ScoredHit s : sorted) results.add(s.hit());
+
+            boolean truncated = totalHitsSeen.get() > results.size();
             boolean partial = timedOut
                     || skippedBlocks.get() > 0
                     || unavailableAtStart > 0
@@ -142,8 +153,8 @@ public class SearchEngine {
                     prunedCount, skippedBlocks.get(), timedOut);
 
             return new SearchResponse(
-                    sorted,
-                    sorted.size(),
+                    results,
+                    results.size(),
                     partial,
                     truncated,
                     timedOut,
@@ -183,41 +194,47 @@ public class SearchEngine {
             if (mapping == null) return ScanOutcome.asFailed();
 
             var header = BlockReader.parseHeaderFromMapping(mapping);
-            List<LogRecord> records = BlockReader.readRecords(mapping, header);
+            String blockId = meta.blockId().toString();
+            List<ScoredHit> hits = new ArrayList<>();
+            AtomicBoolean deadlineReached = new AtomicBoolean();
 
-            List<SearchResponse.SearchHit> hits = new ArrayList<>();
-            int checked = 0;
-            for (LogRecord record : records) {
-                if ((++checked & 0xFF) == 0 && System.nanoTime() >= deadlineNanos) {
-                    return new ScanOutcome(hits, false, true);
+            BlockReader.forEachRecord(mapping, header, (record, recordIndex) -> {
+                if ((recordIndex & 0xFF) == 0 && recordIndex > 0 && System.nanoTime() >= deadlineNanos) {
+                    deadlineReached.set(true);
+                    return false;
                 }
                 if (Thread.currentThread().isInterrupted()) {
-                    return new ScanOutcome(hits, false, true);
+                    deadlineReached.set(true);
+                    return false;
                 }
-                if (record.timestamp() < fromMs || record.timestamp() >= toMs) continue;
+                if (record.timestamp() < fromMs || record.timestamp() >= toMs) return true;
 
                 if (tags != null && !tags.isEmpty()) {
-                    boolean allMatch = true;
                     for (var entry : tags.entrySet()) {
                         if (!entry.getValue().equals(record.tags().get(entry.getKey()))) {
-                            allMatch = false;
-                            break;
+                            return true;
                         }
                     }
-                    if (!allMatch) continue;
                 }
 
                 if (text != null && !text.isEmpty() && !record.message().contains(text)) {
-                    continue;
+                    return true;
                 }
 
-                hits.add(new SearchResponse.SearchHit(
-                        Instant.ofEpochMilli(record.timestamp()).toString(),
-                        record.tags(),
-                        record.message()
+                hits.add(new ScoredHit(
+                        record.timestamp(),
+                        blockId,
+                        recordIndex,
+                        new SearchResponse.SearchHit(
+                                Instant.ofEpochMilli(record.timestamp()).toString(),
+                                record.tags(),
+                                record.message()
+                        )
                 ));
-            }
-            return new ScanOutcome(hits, false, false);
+                return true;
+            });
+
+            return new ScanOutcome(hits, false, deadlineReached.get());
         } catch (BlockReader.BlockCorruptException e) {
             log.warn("Corrupt block {} during scan: {}", meta.blockId(), e.getMessage());
             catalog.markUnavailable(meta.blockId());
@@ -235,7 +252,7 @@ public class SearchEngine {
         return maxActiveQueries - queryPermits.availablePermits();
     }
 
-    private record ScanOutcome(List<SearchResponse.SearchHit> hits, boolean failed, boolean timedOut) {
+    private record ScanOutcome(List<ScoredHit> hits, boolean failed, boolean timedOut) {
         static ScanOutcome asFailed() { return new ScanOutcome(List.of(), true, false); }
         static ScanOutcome asTimedOut() { return new ScanOutcome(List.of(), false, true); }
     }

@@ -191,6 +191,36 @@ class HttpApiIntegrationTest {
 
     @Test
     @Order(7)
+    void badRequestOnOversizedTagKey() {
+        String longKey = "k".repeat(257);
+        ResponseEntity<Map> resp = rest.postForEntity(
+                "/api/v1/logs",
+                new IngestRequest("tenant-a", List.of(
+                        new IngestRequest.RecordInput(
+                                Instant.now().toString(), Map.of(longKey, "v"), "msg"))),
+                Map.class);
+        assertEquals(HttpStatus.BAD_REQUEST, resp.getStatusCode());
+        assertTrue(resp.getBody().get("errors").toString().contains("tag key"),
+                "expected tag-key error, got: " + resp.getBody());
+    }
+
+    @Test
+    @Order(8)
+    void badRequestOnOversizedTagValue() {
+        String longVal = "v".repeat(257);
+        ResponseEntity<Map> resp = rest.postForEntity(
+                "/api/v1/logs",
+                new IngestRequest("tenant-a", List.of(
+                        new IngestRequest.RecordInput(
+                                Instant.now().toString(), Map.of("k", longVal), "msg"))),
+                Map.class);
+        assertEquals(HttpStatus.BAD_REQUEST, resp.getStatusCode());
+        assertTrue(resp.getBody().get("errors").toString().contains("tag value"),
+                "expected tag-value error, got: " + resp.getBody());
+    }
+
+    @Test
+    @Order(9)
     void searchWithWrongTenantReturnsEmpty() {
         SearchRequest search = new SearchRequest(
                 "other-tenant",

@@ -33,9 +33,9 @@ export function NLSearchTab({ onExecute, loading }: NLSearchTabProps) {
           <h3 className="text-sm font-semibold">Natural-language search isn&apos;t enabled yet</h3>
           <p className="max-w-md text-sm text-muted-foreground">
             This deployment ships the full NL-search UI and translation logic, but no
-            language-model API key is configured, so the feature stays inactive. Once
-            an operator sets <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">
-              NEXT_PUBLIC_ANTHROPIC_API_KEY
+            language-model API key is configured on the server, so the feature stays
+            inactive. Once an operator sets <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">
+              ANTHROPIC_API_KEY
             </code>{" "}
             in <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">.env.local</code>,
             this tab will translate plain-English queries (e.g. &quot;payment errors in the

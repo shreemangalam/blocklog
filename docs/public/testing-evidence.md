@@ -1,6 +1,6 @@
 ﻿# BlockLog: Testing Evidence
 
-Status: 2026-09-19. Correctness suite (**39 tests**) is green, plus three measurement bundles now published: end-to-end tenant workload (`demo-2026-09-16-a`), JMH codec baseline (`jmh-2026-09-16-a`), and memory overhead (`memory-2026-09-16-a`). All four sprint metrics now have numbers. Replace pending entries only with actual saved results.
+Status: 2026-09-19. Correctness suite (**42 tests**) is green, plus three measurement bundles now published: end-to-end tenant workload (`demo-2026-09-16-a`), JMH codec baseline (`jmh-2026-09-16-a`), and memory overhead (`memory-2026-09-16-a`). All four sprint metrics now have numbers. Replace pending entries only with actual saved results.
 
 ## Headline measurements
 
@@ -46,8 +46,8 @@ For memory, record JVM heap settings, a fixed sampling interval (proposed one se
 | Concurrency | Concurrent ingest/search snapshots, global permits across queries, cancellation cleanup, bounded results and backlog | Partial: scan-permit deadline honoring covered by `SearchEngineTest.queryReturnsTimedOutInsteadOfBlockingUnderScanPermitStarvation` (returns near 300 ms deadline with 0 permits). Multi-writer stress test still pending |
 | Partial results | One bad block among healthy files, unknown-relevance recovery failure, timeout, missing published file, visible UI warning | **Covered** by `SearchEngineTest.reportsUnavailableBlocksWithoutFailingSearch` and by the corruption path in `BlockCatalogRestartTest.payloadCorruptionIsSurfacedOnMappingLoad`. UI partial banner still pending |
 | Lifecycle | Graceful drain, failed shutdown reported, restart on Windows, stable mapping reuse over repeated searches | Partial: drain by `IngestionEngineTest.acceptsRecordsAndPersistsOnShutdown`; Windows restart proven by `demo-2026-09-16-a` (backend killed + restarted, 2 blocks rediscovered). Stable mapping reuse across queries still not measured |
-| API/UI | Validation/413/429/503, real ingest-to-search journey, loading/empty/error states, `/help`, `/onboarding` | **Covered** by `HttpApiIntegrationTest` (7 tests: 202 round-trip, 400 validation ×2, 429 queue exhaustion, tenant isolation, /status, /actuator/prometheus) plus `IngestionUnhealthyIntegrationTest` (503). Loading/empty/error UI states verified manually against live backend, run ledger |
-| NL search | Valid translation, malformed LLM output, LLM timeout, network failure, search API rejection of generated query, structured-form fallback, no data leakage | Not exercised: no API key is configured; the tab renders the "Coming in a future version" panel per CLAUDE.md §6 guardrail. Structured-form fallback verified |
+| API/UI | Validation/413/429/503, real ingest-to-search journey, loading/empty/error states, `/help`, `/onboarding` | **Covered** by `HttpApiIntegrationTest` (9 tests: 202 round-trip, 400 validation x4 including oversized tag key/value, 429 queue exhaustion, tenant isolation, /status, /actuator/prometheus) plus `IngestionUnhealthyIntegrationTest` (503). Loading/empty/error UI states verified manually against live backend, run ledger |
+| NL search | Valid translation, malformed LLM output, LLM timeout, network failure, search API rejection of generated query, structured-form fallback, no data leakage | Not exercised: no API key is configured; the tab renders the "Coming in a future version" panel. LLM call is proxied through a server-side Next.js route handler (`/api/nl-translate`), so the API key never reaches the browser. Structured-form fallback verified |
 
 Use JUnit 5 for unit and integration checks. Use temporary directories for storage tests and subprocesses for crash/restart tests. Add Testcontainers for packaged service smoke tests once an application image and Docker runtime exist; do not add a database dependency merely to exercise Testcontainers. Tests must verify outcomes, not sleep for a hopeful amount of time.
 
@@ -86,6 +86,8 @@ Compare a sequential scan with bounded parallel scan and pruning enabled/disable
 ## Evidence bundle
 
 Create one `docs/public/evidence/<run-id>/` per accepted measurement bundle. Include `environment.md`, `commands.txt`, `dataset-manifest.json`, `config.json`, `jmh.json`, `search-samples.csv`, `memory-samples.csv`, test summary, and a concise result interpretation. Save full local diagnostic logs under ignored `artifacts/`; publish only reviewed, sanitized evidence. Large generated datasets belong outside Git.
+
+**Note for clones:** The `artifacts/` directory is gitignored and not present in the repository. To reproduce the raw benchmark data, run the reproduction commands listed in each "Measured results" section below. The commands are deterministic (same seed produces same records), so results will be statistically similar on comparable hardware.
 
 Until these harnesses exist, there are no valid project benchmark commands. Day 1 must establish `mvnw.cmd verify` from `backend`; Day 2 must document the actual JMH profile and invocation. Never paste an assumed benchmark command into a "passed" table.
 

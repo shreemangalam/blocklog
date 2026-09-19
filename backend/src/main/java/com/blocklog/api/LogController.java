@@ -75,6 +75,7 @@ public class LogController {
         }
 
         if (request.records() != null) {
+            long batchBytes = 0;
             for (int i = 0; i < request.records().size(); i++) {
                 var rec = request.records().get(i);
                 if (rec.message() == null || rec.message().isBlank()) {
@@ -83,9 +84,37 @@ public class LogController {
                 if (rec.timestamp() == null || rec.timestamp().isBlank()) {
                     errors.add("records[" + i + "].timestamp is required");
                 }
-                if (rec.tags() != null && rec.tags().size() > config.maxTagsPerRecord()) {
-                    errors.add("records[" + i + "] exceeds max tags: " + config.maxTagsPerRecord());
+                if (rec.tags() != null) {
+                    if (rec.tags().size() > config.maxTagsPerRecord()) {
+                        errors.add("records[" + i + "] exceeds max tags: " + config.maxTagsPerRecord());
+                    }
+                    for (var entry : rec.tags().entrySet()) {
+                        if (entry.getKey().getBytes(StandardCharsets.UTF_8).length > config.maxTagKeyBytes()) {
+                            errors.add("records[" + i + "] tag key exceeds max length: " + config.maxTagKeyBytes());
+                        }
+                        if (entry.getValue() != null
+                                && entry.getValue().getBytes(StandardCharsets.UTF_8).length > config.maxTagValueBytes()) {
+                            errors.add("records[" + i + "] tag value exceeds max length: " + config.maxTagValueBytes());
+                        }
+                    }
                 }
+                if (rec.message() != null) {
+                    batchBytes += rec.message().getBytes(StandardCharsets.UTF_8).length;
+                }
+                if (rec.timestamp() != null) {
+                    batchBytes += rec.timestamp().getBytes(StandardCharsets.UTF_8).length;
+                }
+                if (rec.tags() != null) {
+                    for (var entry : rec.tags().entrySet()) {
+                        batchBytes += entry.getKey().getBytes(StandardCharsets.UTF_8).length;
+                        if (entry.getValue() != null) {
+                            batchBytes += entry.getValue().getBytes(StandardCharsets.UTF_8).length;
+                        }
+                    }
+                }
+            }
+            if (batchBytes > config.maxBatchBytes()) {
+                errors.add("Batch exceeds maximum size: " + config.maxBatchBytes() + " bytes");
             }
         }
         return errors;

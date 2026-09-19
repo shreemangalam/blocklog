@@ -88,12 +88,33 @@ public final class BlockReader {
         return header;
     }
 
+    @FunctionalInterface
+    public interface RecordVisitor {
+        /** Return true to continue iteration, false to stop early. */
+        boolean visit(LogRecord record, int index);
+    }
+
     /**
      * Read + validate + decompress the payload from an already-open mmap.
      * Bounds and header integrity must already be verified by the caller
      * (see {@link #parseHeaderFromMapping}).
      */
     public static List<LogRecord> readRecords(BlockMapping mapping, BlockHeader header)
+            throws BlockCorruptException {
+        List<LogRecord> records = new ArrayList<>(header.recordCount());
+        forEachRecord(mapping, header, (record, idx) -> {
+            records.add(record);
+            return true;
+        });
+        return records;
+    }
+
+    /**
+     * Stream-decode records from a block without materializing the full list.
+     * The visitor receives each record and its 0-based index; returning false
+     * stops iteration early (e.g. on deadline expiry).
+     */
+    public static void forEachRecord(BlockMapping mapping, BlockHeader header, RecordVisitor visitor)
             throws BlockCorruptException {
         ByteBuffer view = mapping.duplicate();
 
@@ -118,14 +139,15 @@ public final class BlockReader {
         decompressor.decompress(compressed, 0, raw, 0, header.rawLength());
 
         ByteBuffer recordBuf = ByteBuffer.wrap(raw);
-        List<LogRecord> records = new ArrayList<>(header.recordCount());
         for (int i = 0; i < header.recordCount(); i++) {
-            records.add(RecordCodec.decode(recordBuf));
+            LogRecord record = RecordCodec.decode(recordBuf);
+            if (!visitor.visit(record, i)) {
+                return;
+            }
         }
         if (recordBuf.hasRemaining()) {
             throw new BlockCorruptException("Trailing bytes after decoded records");
         }
-        return records;
     }
 
     /**

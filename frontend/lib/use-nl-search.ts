@@ -1,11 +1,7 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { SearchRequest } from "./types";
-
-const NL_TIMEOUT_MS = 8000;
-const LLM_MODEL = process.env.NEXT_PUBLIC_LLM_MODEL ?? "claude-sonnet-4-6";
-const KNOWN_TENANTS = ["acme", "globex", "initech"];
 
 export type NLSearchStatus =
   | "idle"
@@ -20,24 +16,6 @@ export interface NLSearchState {
   status: NLSearchStatus;
   parsedQuery: Partial<SearchRequest> | null;
   errorMessage: string | null;
-}
-
-function buildSystemPrompt(nowIso: string): string {
-  return [
-    "You translate a natural-language incident-response query into a JSON object matching this exact schema for POST /api/v1/search:",
-    "{",
-    '  "tenant_id": string (required),',
-    '  "from": ISO-8601 UTC timestamp (required),',
-    '  "to": ISO-8601 UTC timestamp (required, must be after from),',
-    '  "tags": object of exact string key/value pairs (optional),',
-    '  "text": string literal substring, case-sensitive (optional),',
-    '  "limit": integer 1-1000 (optional, default 100),',
-    '  "timeout_ms": integer 1-30000 (optional, default 5000)',
-    "}",
-    `The current UTC time is ${nowIso}. Resolve relative time expressions ("last 2 hours", "yesterday") against this instant.`,
-    `Known tenant identifiers: ${KNOWN_TENANTS.join(", ")}. Match informal references to the closest known tenant.`,
-    "Respond with valid JSON only. No markdown fencing, no explanation, no extra keys.",
-  ].join("\n");
 }
 
 function validateParsedQuery(candidate: unknown): Partial<SearchRequest> {
@@ -79,23 +57,32 @@ function validateParsedQuery(candidate: unknown): Partial<SearchRequest> {
   return result;
 }
 
-/**
- * Frontend-only NL-to-structured-query translation. See technical-design.md for the contract.
- * Gated on the LLM API key env var: with no key configured this never makes a network call
- * and reports status "unavailable" so callers can render a future-version notice.
- */
 export function useNLSearch() {
   const [state, setState] = useState<NLSearchState>({
     status: "idle",
     parsedQuery: null,
     errorMessage: null,
   });
+  const [isConfigured, setIsConfigured] = useState(false);
 
-  const apiKey = process.env.NEXT_PUBLIC_ANTHROPIC_API_KEY;
+  useEffect(() => {
+    fetch("/api/nl-translate")
+      .then((r) => r.json())
+      .then((data) => setIsConfigured(data.enabled === true))
+      .catch(() => setIsConfigured(false));
+  }, []);
 
-  const translate = useCallback(
-    async (query: string) => {
-      if (!apiKey) {
+  const translate = useCallback(async (query: string) => {
+    setState({ status: "translating", parsedQuery: null, errorMessage: null });
+
+    try {
+      const response = await fetch("/api/nl-translate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query }),
+      });
+
+      if (response.status === 503) {
         setState({
           status: "unavailable",
           parsedQuery: null,
@@ -104,75 +91,48 @@ export function useNLSearch() {
         return;
       }
 
-      setState({ status: "translating", parsedQuery: null, errorMessage: null });
-
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), NL_TIMEOUT_MS);
-
-      try {
-        const nowIso = new Date().toISOString();
-        const response = await fetch("https://api.anthropic.com/v1/messages", {
-          method: "POST",
-          signal: controller.signal,
-          headers: {
-            "Content-Type": "application/json",
-            "x-api-key": apiKey,
-            "anthropic-version": "2023-06-01",
-            "anthropic-dangerous-direct-browser-access": "true",
-          },
-          body: JSON.stringify({
-            model: LLM_MODEL,
-            max_tokens: 512,
-            system: buildSystemPrompt(nowIso),
-            messages: [{ role: "user", content: query }],
-          }),
+      if (response.status === 504) {
+        setState({
+          status: "timeout",
+          parsedQuery: null,
+          errorMessage: "Translation timed out. Try a shorter query, or use the structured form.",
         });
-
-        if (!response.ok) {
-          throw new Error(`LLM API returned ${response.status}`);
-        }
-
-        const data = await response.json();
-        const text: string = data?.content?.[0]?.text ?? "";
-
-        let candidate: unknown;
-        try {
-          candidate = JSON.parse(text);
-        } catch {
-          setState({
-            status: "parse_error",
-            parsedQuery: null,
-            errorMessage: "Couldn't interpret that query. Try rephrasing, or use the structured form.",
-          });
-          return;
-        }
-
-        const parsed = validateParsedQuery(candidate);
-        setState({ status: "success", parsedQuery: parsed, errorMessage: null });
-      } catch (err) {
-        if (err instanceof DOMException && err.name === "AbortError") {
-          setState({
-            status: "timeout",
-            parsedQuery: null,
-            errorMessage: "Translation timed out. Try a shorter query, or use the structured form.",
-          });
-        } else {
-          setState({
-            status: "network_error",
-            parsedQuery: null,
-            errorMessage: "Could not reach the translation service. Use the structured form.",
-          });
-        }
-      } finally {
-        clearTimeout(timer);
+        return;
       }
-    },
-    [apiKey]
-  );
+
+      if (!response.ok) {
+        throw new Error(`Server returned ${response.status}`);
+      }
+
+      const data = await response.json();
+      const text: string = data?.text ?? "";
+
+      let candidate: unknown;
+      try {
+        candidate = JSON.parse(text);
+      } catch {
+        setState({
+          status: "parse_error",
+          parsedQuery: null,
+          errorMessage: "Couldn't interpret that query. Try rephrasing, or use the structured form.",
+        });
+        return;
+      }
+
+      const parsed = validateParsedQuery(candidate);
+      setState({ status: "success", parsedQuery: parsed, errorMessage: null });
+    } catch {
+      setState({
+        status: "network_error",
+        parsedQuery: null,
+        errorMessage: "Could not reach the translation service. Use the structured form.",
+      });
+    }
+  }, []);
 
   const reset = useCallback(() => {
     setState({ status: "idle", parsedQuery: null, errorMessage: null });
   }, []);
 
-  return { state, translate, reset, isConfigured: Boolean(apiKey) };
+  return { state, translate, reset, isConfigured };
 }
