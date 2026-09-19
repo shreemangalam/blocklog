@@ -16,7 +16,7 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * The mmap cache in {@link BlockCatalog} is bounded — under sustained
+ * The mmap cache in {@link BlockCatalog} is bounded. Under sustained
  * unique-block queries it must evict the least-recently-used mapping and
  * close its FileChannel instead of growing without limit.
  */

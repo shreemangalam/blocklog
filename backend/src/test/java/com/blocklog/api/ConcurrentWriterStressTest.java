@@ -34,7 +34,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * 1. Every record accepted at HTTP 202 (returned from the controller) is
  *    counted by {@link IngestionEngine#getAcceptedRecords()}. No lost
  *    records, no double-counting.
- * 2. After a graceful drain, persisted_records equals accepted_records —
+ * 2. After a graceful drain, persisted_records equals accepted_records;
  *    the whole pipeline conserves work across concurrent producers.
  * 3. The search engine's active-query semaphore is released cleanly:
  *    getActiveQueries() returns 0 after the workload finishes. No permit
@@ -60,7 +60,7 @@ class ConcurrentWriterStressTest {
         registry.add("blocklog.data-dir", () -> tempDataDir.toString());
         // Small flush so the run produces multiple blocks the searchers can hit.
         registry.add("blocklog.flush-size-bytes", () -> "50000");
-        // Generous budgets — this test proves conservation, not backpressure.
+        // Generous budgets; this test proves conservation, not backpressure.
         registry.add("blocklog.queue-bytes-budget", () -> String.valueOf(64L << 20));
         registry.add("blocklog.buffer-bytes-budget", () -> String.valueOf(64L << 20));
     }

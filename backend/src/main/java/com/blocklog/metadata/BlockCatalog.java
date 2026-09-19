@@ -32,7 +32,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * duplicate that is still being read. Published block files are never
  * mutated or deleted during a live run.
  *
- * The cache is a soft ceiling — Caffeine may briefly hold slightly more
+ * The cache is a soft ceiling; Caffeine may briefly hold slightly more
  * than {@code mmapCacheSize} while background eviction catches up. Callers
  * must not depend on an exact upper bound.
  */
@@ -182,7 +182,7 @@ public class BlockCatalog implements Closeable {
 
     @Override
     public void close() {
-        // Invalidate every entry — the removal listener closes each mapping.
+        // Invalidate every entry; the removal listener closes each mapping.
         mappings.invalidateAll();
         mappings.cleanUp();
     }

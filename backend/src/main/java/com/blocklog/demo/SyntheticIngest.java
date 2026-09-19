@@ -13,8 +13,8 @@ import java.util.Random;
  * Synthetic log generator for demo and manual load tests.
  *
  * Posts realistic microservice logs to /api/v1/logs for a chosen tenant.
- * Distribution is roughly the shape you see in real traffic — mostly INFO,
- * some WARN, occasional ERROR — spread across a handful of named services
+ * Distribution is roughly the shape you see in real traffic: mostly INFO,
+ * some WARN, occasional ERROR; spread across a handful of named services
  * with correlated tags (env, service, level, region). Message bodies carry
  * fake user/order/sku ids so keyword searches ("payment", "timeout",
  * "SKU-4172") return interesting result sets in the UI.
@@ -35,7 +35,7 @@ public final class SyntheticIngest {
     private static final String[] REGIONS = {"us-east-1", "us-west-2", "eu-west-1", "ap-south-1"};
 
     private static final Template[] TEMPLATES = {
-            // INFO — normal operation, most traffic
+            // INFO: normal operation, most traffic
             info("web-gateway", "request GET /api/orders/%ORDER% 200 in %MS%ms user=%USER%"),
             info("web-gateway", "request POST /api/checkout 202 in %MS%ms user=%USER%"),
             info("web-gateway", "request GET /api/products/%SKU% 200 in %MS%ms"),
@@ -48,13 +48,13 @@ public final class SyntheticIngest {
             info("inventory",   "warehouse sync completed sku=%SKU% at %MS%ms"),
             info("email",       "notification sent to user=%USER% template=order-confirmation"),
             info("email",       "notification sent to user=%USER% template=shipping-update"),
-            // WARN — degraded, notable
+            // WARN: degraded, notable
             warn("web-gateway", "upstream response 502 from checkout retry=%RETRY%"),
             warn("web-gateway", "request GET /api/products/%SKU% slow %MS%ms threshold_ms=200"),
             warn("search",      "slow query q=\"%QUERY%\" %MS%ms threshold_ms=100"),
             warn("inventory",   "low stock sku=%SKU% remaining=%STOCK% threshold=10"),
             warn("payments",    "retryable failure order=%ORDER% code=%CODE% attempt=%RETRY%"),
-            // ERROR — real problems
+            // ERROR: real problems
             error("checkout",   "payment gateway timeout for user=%USER% order=%ORDER%"),
             error("payments",   "payment declined order=%ORDER% code=%CODE% reason=\"insufficient funds\""),
             error("payments",   "payment declined order=%ORDER% code=%CODE% reason=\"card expired\""),
@@ -215,7 +215,7 @@ public final class SyntheticIngest {
     }
 
     private static int parseAcceptedRecords(String body) {
-        // Body is like {"accepted_records":25,"durability":"buffered"} — no need
+        // Body is like {"accepted_records":25,"durability":"buffered"}; no need
         // to pull in Jackson for one integer. Locate the key and read digits.
         int key = body.indexOf("\"accepted_records\"");
         if (key < 0) return 0;

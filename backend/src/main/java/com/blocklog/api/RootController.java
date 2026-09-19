@@ -17,7 +17,7 @@ import java.util.Map;
  * Landing + error handling for the backend HTTP surface.
  *
  * Before this existed, a browser hitting {@code http://localhost:8080} got
- * Spring Boot's Whitelabel Error Page — a real "this doesn't look organized"
+ * Spring Boot's Whitelabel Error Page; a real "this doesn't look organized"
  * moment for an operator or an interviewer. Now the root returns a small
  * JSON manifest of the API surface; a bare {@code /error} returns the same
  * shape as any other 4xx/5xx with a machine-readable body, no whitelabel.
@@ -48,7 +48,7 @@ public class RootController implements ErrorController {
                 ),
                 "docs", Map.of(
                         "readme", "https://github.com/shreemangalam/blocklog",
-                        "help_ui", "/../help — served from the frontend, not this port"
+                        "help_ui", "/../help (served from the frontend, not this port)"
                 )
         );
     }

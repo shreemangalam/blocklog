@@ -20,7 +20,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * sprint.
  *
  * When {@code perTenantCapacity == globalCapacity}, this behaves identically
- * to a single global {@link ByteBudget} — the per-tenant slice is the whole
+ * to a single global {@link ByteBudget}; the per-tenant slice is the whole
  * pool and one tenant can fill it.
  */
 public final class TenantByteBudget {
@@ -49,7 +49,7 @@ public final class TenantByteBudget {
     public boolean tryAcquire(String tenant, long bytes) {
         AtomicLong tenantCounter = perTenantInUse.computeIfAbsent(tenant, k -> new AtomicLong());
 
-        // Reserve tenant slice first — cheaper to roll back if global fails.
+        // Reserve tenant slice first; cheaper to roll back if global fails.
         while (true) {
             long current = tenantCounter.get();
             long next = current + bytes;

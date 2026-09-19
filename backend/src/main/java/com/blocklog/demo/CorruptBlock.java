@@ -8,7 +8,7 @@ import java.util.Locale;
 
 /**
  * Deliberately flips one byte deep inside a {@code .blk} file's compressed
- * payload region — the last 128 bytes are safely inside every block. The
+ * payload region; the last 128 bytes are safely inside every block. The
  * header CRC still verifies (so restart discovery keeps the block in the
  * catalog as available), but the payload CRC fails on any read. The engine
  * degrades the block to unavailable on the first scan and reports it via

@@ -12,13 +12,13 @@ import java.util.Locale;
  * Samples heap (JMX committed + used) via {@code /actuator/metrics/{jvm.memory.*}}
  * every {@code intervalMs} for {@code durationSeconds}, reporting min / max /
  * mean under the observed workload. This process itself doesn't run the
- * backend — it hits the backend's own metrics endpoints so the numbers reflect
+ * backend; it hits the backend's own metrics endpoints so the numbers reflect
  * the JVM under test, not this measurement tool.
  *
  * Windows working set is not read here; the point is to expose the delta
  * between an idle and loaded JVM. For platform-specific resident-set
  * numbers, cross-reference {@code Get-Process -Name java} in PowerShell
- * or the OS-level equivalent — this tool intentionally stays JVM-only.
+ * or the OS-level equivalent; this tool intentionally stays JVM-only.
  *
  * Usage:
  *   java -cp target/classes com.blocklog.demo.MeasureMemory \

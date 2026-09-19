@@ -1,6 +1,6 @@
 # BlockLog
 
-**An index-free log storage engine for incident-response search.** Immutable LZ4-compressed blocks on disk, an in-memory summary catalog for tenant / time / tag pruning, and virtual-thread scans over the surviving candidates. Every response tells you exactly what it saw — no silent partial answers, no unbounded query time.
+**An index-free log storage engine for incident-response search.** Immutable LZ4-compressed blocks on disk, an in-memory summary catalog for tenant / time / tag pruning, and virtual-thread scans over the surviving candidates. Every response tells you exactly what it saw. No silent partial answers, no unbounded query time.
 
 Single-node prototype. Not a production database.
 
@@ -10,7 +10,7 @@ Single-node prototype. Not a production database.
 
 ## What it is
 
-Every log record is a note. Every search asks *"which of the last N notes match this tenant, this time window, these tags, this keyword?"*. Most systems answer that by building a giant per-word inverted index. BlockLog skips the index and pays for the scan instead — because in incident-response you already know the tenant, the time window, and roughly what you're looking for, so pruning cuts the work by 90%+ before any byte is read.
+Every log record is a note. Every search asks *"which of the last N notes match this tenant, this time window, these tags, this keyword?"*. Most systems answer that by building a giant per-word inverted index. BlockLog skips the index and pays for the scan instead. In incident-response you already know the tenant, the time window, and roughly what you're looking for, so pruning cuts the work by 90%+ before any byte is read.
 
 - **Ingest**: HTTP → validate → reserve bytes on a queue budget → jctools MPSC queue → single consumer drains into per-tenant buffers → flush at 5 MB or 5 s → LZ4 + CRC32 → atomic rename → catalog register. 202 buffered ≠ durable; documented in `/help`.
 - **Storage**: one immutable file per block. Header + payload CRCs. Restart discovery rebuilds the catalog from disk.
@@ -32,7 +32,7 @@ Full bundle in [`docs/public/testing-evidence.md`](docs/public/testing-evidence.
 | Cross-tenant prune | **33.3%** (2 of 3 blocks survive tenant filter) |
 | Memory (idle → loaded) | 28 MB → 143 MB heap during 100k ingest |
 | JMH codec best case | decode **31.7 M ops/sec** at 64 B / 0 tags |
-| Correctness suite | **29 tests, all passing** — round-trip, restart discovery, corruption injection, mmap eviction, HTTP 429/503, cross-tenant isolation, deadline honoring |
+| Correctness suite | **37 tests, all passing**: round-trip, restart discovery, corruption injection, mmap eviction, HTTP 429/503, cross-tenant isolation, deadline honoring, error surface, search equivalence |
 
 ---
 
@@ -66,7 +66,7 @@ java -cp target/classes com.blocklog.demo.SyntheticIngest --tenant demo-shop --c
 
 Or on Windows: `.\scripts\seed-demo.ps1 -Tenant demo-shop -Count 1000`.
 
-Open [http://localhost:3000](http://localhost:3000), type tenant `demo-shop`, pick a wide time range (**inputs are UTC**), and search — the structured form is the primary interface. `/status` shows live counters, `/help` explains the semantics, `/onboarding` runs a three-step guided walkthrough.
+Open [http://localhost:3000](http://localhost:3000), type tenant `demo-shop`, pick a wide time range (**inputs are UTC**), and search. The structured form is the primary interface. `/status` shows live counters, `/help` explains the semantics, `/onboarding` runs a three-step guided walkthrough.
 
 ---
 
@@ -126,17 +126,17 @@ curl -sS -X POST http://localhost:8080/api/v1/search -H 'Content-Type: applicati
 }' | jq '{partial, unavailable_blocks, scanned_blocks, candidate_blocks}'
 ```
 
-Response carries `partial: true`, `unavailable_blocks: 1`, and `scanned_blocks < candidate_blocks`. The block passed header CRC at discovery (still counted as a candidate) but the payload CRC caught the flip at scan time — the block degrades to unavailable on the first scan and the response reports it honestly. `/status` will also now show `unavailable_blocks >= 1`.
+Response carries `partial: true`, `unavailable_blocks: 1`, and `scanned_blocks < candidate_blocks`. The block passed header CRC at discovery (still counted as a candidate) but the payload CRC caught the flip at scan time. The block degrades to unavailable on the first scan and the response reports it honestly. Check `/status` for `unavailable_blocks >= 1`.
 
 ---
 
 ## Tech stack
 
-**Backend** — Java 21, virtual threads, Spring Boot 3.4, `java.nio`, lz4-java, jctools MPSC queue, Caffeine bounded mmap cache, Micrometer + Prometheus metrics. JUnit 5 + JMH.
+**Backend**: Java 21, virtual threads, Spring Boot 3.4, `java.nio`, lz4-java, jctools MPSC queue, Caffeine bounded mmap cache, Micrometer + Prometheus metrics. JUnit 5 + JMH.
 
-**Frontend** — Next.js App Router 16, TypeScript, Tailwind CSS, shadcn/ui, strict light theme.
+**Frontend**: Next.js App Router 16, TypeScript, Tailwind CSS, shadcn/ui, strict light theme.
 
-**NL Search** (opt-in, currently inert without an API key) — Anthropic Messages API translates plain English to the structured search JSON. Structured form remains the primary interface; NL is additive and the project functions fully without it.
+**NL Search** (opt-in, currently inert without an API key): a language model API translates plain English to the structured search JSON. Structured form remains the primary interface; NL is additive and the project functions fully without it.
 
 ---
 
@@ -153,14 +153,13 @@ backend/                                Java 21 engine + Spring Boot API
     search/                             SearchEngine (virtual-thread scan, deadline)
     storage/                            BlockWriter, BlockReader, BlockMapping, RecordCodec
     demo/                               SyntheticIngest, MeasureSearch, MeasureCompression, MeasureMemory
-  src/test/java/com/blocklog/           29 unit + integration tests
+  src/test/java/com/blocklog/           37 unit + integration tests
   src/jmh/java/com/blocklog/bench/      CodecBenchmark, ScanBenchmark
 frontend/                               Next.js 16 App Router UI
 docs/public/
   functional-design.md
-  technical-design.md
+  architecture.svg
   testing-evidence.md                   Measured bundle with reproduction commands
-  interview-questions.md
 scripts/
   seed-demo.ps1                         One-command demo tenant on Windows
 .github/workflows/ci.yml                Backend test + frontend build on push/PR
@@ -170,13 +169,13 @@ scripts/
 
 ## What this isn't, stated plainly
 
-- **No write-ahead log this sprint.** A crash between the 202 acknowledgement and block publish can lose queued or unflushed records — seconds of traffic under backlog. `/help` says this.
+- **No write-ahead log this sprint.** A crash between the 202 acknowledgement and block publish can lose queued or unflushed records. Potentially seconds of traffic under backlog. `/help` says this.
 - **No authentication.** `tenant_id` is a string a client sends; the engine trusts it. Enforcement layers are a follow-up, not a redesign.
 - **No full-text index, no ranking, no fuzzy matching, no regex.** Case-sensitive substring only.
 - **Not distributed, not replicated, not multi-node.**
 - **Not measured on hardware other than one Windows laptop.** Numbers are localhost-only; network hops would dominate the ~40 ms engine time.
 
-The scope statement in [`CLAUDE.md`](CLAUDE.md) is the source of truth.
+This is intentional scope for a sprint-sized prototype.
 
 ---
 

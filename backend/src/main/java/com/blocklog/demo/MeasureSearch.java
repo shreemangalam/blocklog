@@ -17,12 +17,12 @@ import java.util.Random;
  *
  * The workload rotates through six query classes that stress different
  * paths:
- *   1. full-tenant, no filters              — scans everything
- *   2. tenant + last 1h                     — time pruning
- *   3. tenant + level=ERROR                 — tag pruning
- *   4. tenant + level=ERROR + service       — two-tag AND
- *   5. tenant + keyword "payment"           — text filter on full set
- *   6. tenant + level=ERROR + keyword       — tag + text
+ *   1. full-tenant, no filters              : scans everything
+ *   2. tenant + last 1h                     : time pruning
+ *   3. tenant + level=ERROR                 : tag pruning
+ *   4. tenant + level=ERROR + service       : two-tag AND
+ *   5. tenant + keyword "payment"           : text filter on full set
+ *   6. tenant + level=ERROR + keyword       : tag + text
  *
  * Each query gets a fresh timeout budget. Latencies are collected client-side
  * (round-trip including network + JSON parse) as the honest number a user

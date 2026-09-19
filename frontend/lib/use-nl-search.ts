@@ -4,7 +4,7 @@ import { useCallback, useState } from "react";
 import type { SearchRequest } from "./types";
 
 const NL_TIMEOUT_MS = 8000;
-const LLM_MODEL = "claude-sonnet-4-6";
+const LLM_MODEL = process.env.NEXT_PUBLIC_LLM_MODEL ?? "claude-sonnet-4-6";
 const KNOWN_TENANTS = ["acme", "globex", "initech"];
 
 export type NLSearchStatus =
@@ -80,9 +80,9 @@ function validateParsedQuery(candidate: unknown): Partial<SearchRequest> {
 }
 
 /**
- * Frontend-only NL-to-structured-query translation, per docs/public/technical-design.md.
- * Gated on NEXT_PUBLIC_ANTHROPIC_API_KEY: with no key configured this never makes a
- * network call and reports status "unavailable" so callers can render a future-version notice.
+ * Frontend-only NL-to-structured-query translation. See technical-design.md for the contract.
+ * Gated on the LLM API key env var: with no key configured this never makes a network call
+ * and reports status "unavailable" so callers can render a future-version notice.
  */
 export function useNLSearch() {
   const [state, setState] = useState<NLSearchState>({

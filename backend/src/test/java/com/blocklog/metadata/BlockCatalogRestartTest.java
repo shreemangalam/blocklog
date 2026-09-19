@@ -21,7 +21,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * originals had.
  *
  * These tests write real .blk files with BlockWriter, then construct a
- * fresh BlockCatalog against the same directory — the same mechanism the
+ * fresh BlockCatalog against the same directory; the same mechanism the
  * live engine uses when {@link BlockCatalog#discoverBlocks(Path)} is
  * called on start-up.
  */

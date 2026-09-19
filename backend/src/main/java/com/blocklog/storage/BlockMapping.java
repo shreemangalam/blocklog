@@ -40,7 +40,7 @@ public final class BlockMapping implements AutoCloseable {
         }
     }
 
-    /** Independent view — safe to read concurrently from multiple threads. */
+    /** Independent view; safe to read concurrently from multiple threads. */
     public ByteBuffer duplicate() {
         return mapped.duplicate().order(mapped.order());
     }

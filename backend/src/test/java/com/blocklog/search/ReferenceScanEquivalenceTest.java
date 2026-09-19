@@ -27,7 +27,7 @@ import static org.junit.jupiter.api.Assertions.*;
 /**
  * Acceptance criterion #2 in functional-design.md: search results equal a
  * naive record-by-record reference scan. This test asserts that no matter
- * what predicates a query carries — tenant, time window, tag AND, keyword —
+ * what predicates a query carries (tenant, time window, tag AND, keyword)
  * {@link SearchEngine#search} returns the same set of matches (by
  * timestamp + message identity) as a straightforward reference implementation
  * over the same source data.
@@ -36,7 +36,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * miscounted or a scan skips records silently, this test fails.
  *
  * The reference scan below intentionally does NOT touch mmap, decompression,
- * or block metadata — it iterates the source records that were written and
+ * or block metadata; it iterates the source records that were written and
  * applies the same predicate semantics documented in {@code /help}: exact
  * tenant, half-open {@code [from, to)}, case-sensitive substring, tag AND.
  */
