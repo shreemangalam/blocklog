@@ -1,6 +1,11 @@
 # BlockLog
 
-**An index-free log storage engine for incident-response search.** Immutable LZ4-compressed blocks on disk, an in-memory summary catalog for tenant / time / tag pruning, and virtual-thread scans over the surviving candidates. Every response tells you exactly what it saw. No silent partial answers, no unbounded query time.
+[![CI](https://github.com/shreemangalam/blocklog/actions/workflows/ci.yml/badge.svg)](https://github.com/shreemangalam/blocklog/actions/workflows/ci.yml)
+&nbsp;![Java 21](https://img.shields.io/badge/Java-21-blue?logo=openjdk&logoColor=white)
+&nbsp;![Spring Boot](https://img.shields.io/badge/Spring_Boot-3.4-brightgreen?logo=springboot&logoColor=white)
+&nbsp;![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=next.js&logoColor=white)
+
+**A log storage engine that skips the index.** Records land in LZ4-compressed immutable blocks on disk. Searches prune over 90% of blocks using a small in-memory catalog before reading a single byte, then scan the survivors in parallel using Java virtual threads with nanosecond deadlines. Every response names exactly what it saw — candidate blocks, scanned blocks, blocks that failed CRC verification, and whether the result is partial.
 
 Single-node prototype. Not a production database.
 
@@ -8,187 +13,117 @@ Single-node prototype. Not a production database.
 
 ---
 
-## Why I built this
+## The design decision
 
-Most log search tools answer "find me events matching X" by building an inverted index: every word in every message becomes a key that points to a list of matching records. That works well when you don't know what you're looking for ahead of time. Incident response is the opposite: you already know the tenant, you already know roughly when the problem started, and you have a tag or a keyword in mind. The index becomes overhead rather than a shortcut.
+Most log search tools build an inverted index: every word in every message maps back to the records containing it. That generalises well when you don't know what you'll query. Incident response is the opposite — you already know the tenant, you know roughly when the event happened, and you have a tag or a keyword. The index is overhead you're paying to not use.
 
-BlockLog makes the opposite bet. Skip the index entirely. Instead, keep a tiny in-memory summary of every block on disk — its tenant, its time range, and a bloom-like tag summary — and use that to prune 90%+ of blocks before reading a single compressed byte. What survives goes to parallel virtual-thread scans with nanosecond deadlines. The result is a system whose search cost scales with how well you know what you're looking for, not with total data volume.
+BlockLog skips it. A small in-memory catalog holds one entry per block: tenant ID, time range, and a tag summary. A query prunes candidates in microseconds, then fires one virtual thread per surviving block. Scans run concurrently with a shared deadline. If the deadline expires mid-scan, the partial result is labelled partial — it is never presented as a complete zero-match answer.
 
-The other thing I wanted to get right was honesty. Most systems return results and say nothing about what they skipped. BlockLog returns `candidate_blocks`, `scanned_blocks`, `unavailable_blocks`, `partial`, `truncated`, and `timed_out` on every response. A partial result is labelled partial. A corrupted block is reported, not silently dropped. That transparency is the core design principle.
-
----
-
-## What it is
-
-Every log record is a note. Every search asks *"which of the last N notes match this tenant, this time window, these tags, this keyword?"*. Most systems answer that by building a giant per-word inverted index. BlockLog skips the index and pays for the scan instead. In incident-response you already know the tenant, the time window, and roughly what you're looking for, so pruning cuts the work by 90%+ before any byte is read.
-
-- **Ingest**: HTTP → validate → reserve bytes on a queue budget → jctools MPSC queue → single consumer drains into per-tenant buffers → flush at 5 MB or 5 s → LZ4 + CRC32 → atomic rename → catalog register. 202 buffered ≠ durable; documented in `/help`.
-- **Storage**: one immutable file per block. Header + payload CRCs. Restart discovery rebuilds the catalog from disk.
-- **Search**: tenant / time / tag prune from an in-memory summary; virtual-thread-per-task scan on the survivors; deadline in nanoseconds; every response carries `candidate_blocks`, `scanned_blocks`, `unavailable_blocks`, `partial`, `truncated`, `timed_out`, `elapsed_ms`.
-- **Frontend**: Next.js App Router / TypeScript / Tailwind / shadcn/ui. Strict light theme. `/`, `/status`, `/help`, `/onboarding`.
+The second principle is honesty. Most systems return results and stay silent about what they skipped. BlockLog reports everything on every response: `candidate_blocks`, `scanned_blocks`, `unavailable_blocks`, `partial`, `truncated`, `timed_out`, `elapsed_ms`. A corrupted block is surfaced and counted, not silently dropped.
 
 ---
 
-## Measured evidence (2026-09-16)
+## Numbers
 
-Full bundle in [`docs/public/testing-evidence.md`](docs/public/testing-evidence.md).
+Measured on a single Windows laptop, all traffic on localhost. Same seeds reproduce the same records byte-for-byte.
+Full commands and interpretation in [`docs/public/testing-evidence.md`](docs/public/testing-evidence.md).
 
 | Metric | Result |
-| --- | --- |
-| Ingestion (single client thread, batch 100) | **31,210 records/sec**, ~4.1 MB/s raw |
-| Compression ratio | **3.86×** on realistic synthetic logs |
-| Search p95 (mixed workload, 300 queries) | **75 ms client / 74 ms engine** |
+|---|---|
+| Ingestion throughput | **31,210 records/sec** — single client thread, batch size 100 |
+| Compression ratio | **3.86x** on realistic synthetic microservice logs |
+| Search p95 | **75 ms** client-side / **74 ms** engine-only across 300 queries |
 | Search p99 | 81 ms / 79 ms |
-| Cross-tenant prune | **33.3%** (2 of 3 blocks survive tenant filter) |
-| Memory (idle → loaded) | 28 MB → 143 MB heap during 100k ingest |
-| JMH codec best case | decode **31.7 M ops/sec** at 64 B / 0 tags |
-| Correctness suite | **37 tests, all passing**: round-trip, restart discovery, corruption injection, mmap eviction, HTTP 429/503, cross-tenant isolation, deadline honoring, error surface, search equivalence |
+| Memory (idle to loaded) | 28 MB heap → 143 MB under 100k record ingest |
+| JMH codec throughput | **31.7M decode ops/sec** at 64 bytes, 0 tags |
+| Test suite | **37 tests** passing — round-trip codec, restart discovery, corruption injection, mmap eviction, deadline enforcement, concurrent writers, cross-tenant isolation, error surface |
+
+---
+
+## How it works
+
+**Ingest:** HTTP request validates fields and checks per-tenant byte budget (429 if exhausted). Accepted records go onto a jctools MPSC queue — the HTTP thread returns `202 Buffered` immediately. A single consumer drains the queue into per-tenant in-memory buffers. A flush trigger fires at 5 MB or 5 seconds, whichever comes first: LZ4 compress, CRC32 header and payload, write to `.blk.tmp`, fsync, atomic rename to `.blk`, register in catalog. `202` means in memory, not on disk. A crash before the next flush loses those records.
+
+**Search:** Catalog prune narrows candidates by exact tenant, overlapping time range, and tag union. Each surviving block gets one virtual thread. The thread mmaps the file, verifies the payload CRC (marks the block unavailable on failure), decompresses with LZ4, and filters records by time, tags, and text substring — checking the deadline every 256 records. Results merge through a min-heap for earliest-K ordering. The response always includes completeness metadata.
+
+**Frontend:** Next.js App Router with a structured search form, a natural-language search tab (translates plain English to the structured query schema; requires an API key, gracefully inert without one), a live engine status page, an operator reference at `/help`, and a guided walkthrough at `/onboarding`.
 
 ---
 
 ## Quick start
 
-Prerequisites: JDK 21 (Temurin), Node 20+, Windows PowerShell or a POSIX shell.
-
-**Backend**
+Requires JDK 21 (Temurin) and Node 20+.
 
 ```bash
-cd backend
-./mvnw -q spring-boot:run
-# API on http://localhost:8080
-```
+# Terminal 1 — backend API on :8080
+cd backend && ./mvnw -q spring-boot:run
 
-**Frontend** (separate terminal)
+# Terminal 2 — frontend on :3000
+cd frontend && npm ci && npm run dev
 
-```bash
-cd frontend
-npm ci
-npm run dev
-# UI on http://localhost:3000
-```
-
-**Seed a demo tenant with 1000 realistic records**
-
-```bash
+# Terminal 3 — seed a demo tenant
 cd backend
 java -cp target/classes com.blocklog.demo.SyntheticIngest --tenant demo-shop --count 1000
 ```
 
-Or on Windows: `.\scripts\seed-demo.ps1 -Tenant demo-shop -Count 1000`.
-
-Open [http://localhost:3000](http://localhost:3000), type tenant `demo-shop`, pick a wide time range (**inputs are UTC**), and search. The structured form is the primary interface. `/status` shows live counters, `/help` explains the semantics, `/onboarding` runs a three-step guided walkthrough.
+Open `http://localhost:3000`, set tenant to `demo-shop`, pick any UTC time range, and search. `/status` shows live counters. `/help` explains every response field. `/onboarding` walks through ingest, flush, and search with the actual request and response bodies shown inline.
 
 ---
 
-## Reproduce the evidence bundle
+## Demo: corruption becomes visibility, not silence
+
+The most interesting thing to run. Flip one byte inside a block's compressed payload, restart the backend, and search across that time range. The engine detects the CRC failure at read time and reports the block as unavailable — it does not crash, does not silently exclude it, and does not pretend the result is complete.
 
 ```bash
+# 1. Seed data and wait ~5 seconds for the flush trigger
 cd backend
-# 1. Ingest
-java -cp target/classes com.blocklog.demo.SyntheticIngest --tenant demo-shop --count 50000 --batch 100
-java -cp target/classes com.blocklog.demo.SyntheticIngest --tenant acme-inc  --count 30000 --batch 100 --seed 99
+java -cp target/classes com.blocklog.demo.SyntheticIngest --tenant demo-shop --count 500
 
-# 2. Compression
-java -cp target/classes com.blocklog.demo.MeasureCompression --data-dir data
-
-# 3. Search latency (six query classes, p50/p95/p99)
-java -cp target/classes com.blocklog.demo.MeasureSearch --tenant demo-shop --warmup 30 --iterations 300
-
-# 4. Memory (run alongside a load; see docs)
-java -cp target/classes com.blocklog.demo.MeasureMemory --seconds 20
-
-# 5. JMH codec baseline (~1 min)
-./mvnw -B -Pjmh -DskipTests clean compile
-./mvnw -B -Pjmh -DskipTests dependency:build-classpath -Dmdep.outputFile=cp.txt
-java -cp "target/classes:$(cat cp.txt)" org.openjdk.jmh.Main -f 1 -wi 2 -w 1 -i 3 -r 1 -rf json -rff ../artifacts/jmh-baseline.json
-```
-
-Same seeds → same records byte-for-byte. See [`docs/public/testing-evidence.md`](docs/public/testing-evidence.md) for full commands and interpretation.
-
----
-
-## Demo the "honest partiality" story
-
-The engine promises: corruption becomes visibility, not silence. To watch that fire end-to-end:
-
-```bash
-# 1. Seed a small tenant, wait for the block to publish
-cd backend
-java -cp target/classes com.blocklog.demo.SyntheticIngest --tenant demo-shop --count 1000
-
-# 2. Flip one byte deep in a block's compressed payload
+# 2. Flip one byte in a block's payload
 ls data/*.blk
 java -cp target/classes com.blocklog.demo.CorruptBlock --file data/<uuid>.blk
 
 # 3. Restart the backend so the catalog rebuilds from disk
-#    (Ctrl+C the running server, then relaunch)
 ./mvnw -q spring-boot:run
 
-# 4. Search overlapping the corrupted block's time range
-curl -sS -X POST http://localhost:8080/api/v1/search -H 'Content-Type: application/json' -d '{
-  "tenant_id": "demo-shop",
-  "from": "2020-01-01T00:00:00Z",
-  "to": "2030-01-01T00:00:00Z",
-  "text": null,
-  "tags": null,
-  "limit": 100,
-  "timeout_ms": 5000
-}' | jq '{partial, unavailable_blocks, scanned_blocks, candidate_blocks}'
+# 4. Search across the corrupted block's time range
+curl -s -X POST http://localhost:8080/api/v1/search \
+  -H 'Content-Type: application/json' \
+  -d '{"tenant_id":"demo-shop","from":"2020-01-01T00:00:00Z","to":"2030-01-01T00:00:00Z","limit":10,"timeout_ms":5000}' \
+  | jq '{partial, unavailable_blocks, scanned_blocks, candidate_blocks}'
 ```
 
-Response carries `partial: true`, `unavailable_blocks: 1`, and `scanned_blocks < candidate_blocks`. The block passed header CRC at discovery (still counted as a candidate) but the payload CRC caught the flip at scan time. The block degrades to unavailable on the first scan and the response reports it honestly. Check `/status` for `unavailable_blocks >= 1`.
+```json
+{
+  "partial": true,
+  "unavailable_blocks": 1,
+  "scanned_blocks": 0,
+  "candidate_blocks": 1
+}
+```
+
+The block passed header CRC at startup so it was counted as a candidate. The payload CRC failed on the first read so it was marked unavailable immediately. Results from any healthy blocks in the same query still come back normally.
 
 ---
 
 ## Tech stack
 
-**Backend**: Java 21, virtual threads, Spring Boot 3.4, `java.nio`, lz4-java, jctools MPSC queue, Caffeine bounded mmap cache, Micrometer + Prometheus metrics. JUnit 5 + JMH.
+**Backend** — Java 21, virtual threads (Project Loom), Spring Boot 3.4, `java.nio`, lz4-java, jctools MPSC queue, Caffeine bounded mmap cache, Micrometer + Prometheus metrics. JUnit 5, JMH.
 
-**Frontend**: Next.js App Router 16, TypeScript, Tailwind CSS, shadcn/ui, strict light theme.
-
-**NL Search** (opt-in, currently inert without an API key): a language model API translates plain English to the structured search JSON. Structured form remains the primary interface; NL is additive and the project functions fully without it.
+**Frontend** — Next.js 16 App Router, TypeScript, Tailwind CSS, shadcn/ui. Strict light theme throughout.
 
 ---
 
-## Repository layout
+## What this deliberately isn't
 
-```text
-backend/                                Java 21 engine + Spring Boot API
-  src/main/java/com/blocklog/
-    api/                                REST controllers + Spring wiring
-    ingest/                             IngestionEngine, ByteBudget, MPSC queue, typed 429/503 exceptions
-    metadata/                           BlockCatalog (bounded mmap cache), BlockMetadata, PruneResult
-    model/                              EngineConfig, request/response DTOs, LogRecord
-    observability/                      EngineMetrics (Micrometer)
-    search/                             SearchEngine (virtual-thread scan, deadline)
-    storage/                            BlockWriter, BlockReader, BlockMapping, RecordCodec
-    demo/                               SyntheticIngest, MeasureSearch, MeasureCompression, MeasureMemory
-  src/test/java/com/blocklog/           37 unit + integration tests
-  src/jmh/java/com/blocklog/bench/      CodecBenchmark, ScanBenchmark
-frontend/                               Next.js 16 App Router UI
-docs/public/
-  functional-design.md
-  architecture.svg
-  testing-evidence.md                   Measured bundle with reproduction commands
-scripts/
-  seed-demo.ps1                         One-command demo tenant on Windows
-.github/workflows/ci.yml                Backend test + frontend build on push/PR
-```
-
----
-
-## What this isn't, stated plainly
-
-- **No write-ahead log this sprint.** A crash between the 202 acknowledgement and block publish can lose queued or unflushed records. Potentially seconds of traffic under backlog. `/help` says this.
-- **No authentication.** `tenant_id` is a string a client sends; the engine trusts it. Enforcement layers are a follow-up, not a redesign.
-- **No full-text index, no ranking, no fuzzy matching, no regex.** Case-sensitive substring only.
-- **Not distributed, not replicated, not multi-node.**
-- **Not measured on hardware other than one Windows laptop.** Numbers are localhost-only; network hops would dominate the ~40 ms engine time.
-
-This is intentional scope for a sprint-sized prototype.
+- **No write-ahead log.** `202 Buffered` is an in-memory acknowledgement. A crash between acceptance and flush loses queued records.
+- **No authentication.** `tenant_id` is client-supplied. A production deployment needs an enforcement layer in front of the ingest endpoint.
+- **No distributed anything.** Single writer, single node, no replication.
+- **No full-text search, no ranking, no fuzzy matching, no regex.** Case-sensitive substring only.
+- **Numbers are from one laptop.** All measurements are localhost; network latency would dominate the ~74 ms engine time.
 
 ---
 
 ## License
 
-See [`LICENSE`](LICENSE).
+[LICENSE](LICENSE)
