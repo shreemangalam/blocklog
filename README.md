@@ -8,6 +8,16 @@ Single-node prototype. Not a production database.
 
 ---
 
+## Why I built this
+
+Most log search tools answer "find me events matching X" by building an inverted index: every word in every message becomes a key that points to a list of matching records. That works well when you don't know what you're looking for ahead of time. Incident response is the opposite: you already know the tenant, you already know roughly when the problem started, and you have a tag or a keyword in mind. The index becomes overhead rather than a shortcut.
+
+BlockLog makes the opposite bet. Skip the index entirely. Instead, keep a tiny in-memory summary of every block on disk — its tenant, its time range, and a bloom-like tag summary — and use that to prune 90%+ of blocks before reading a single compressed byte. What survives goes to parallel virtual-thread scans with nanosecond deadlines. The result is a system whose search cost scales with how well you know what you're looking for, not with total data volume.
+
+The other thing I wanted to get right was honesty. Most systems return results and say nothing about what they skipped. BlockLog returns `candidate_blocks`, `scanned_blocks`, `unavailable_blocks`, `partial`, `truncated`, and `timed_out` on every response. A partial result is labelled partial. A corrupted block is reported, not silently dropped. That transparency is the core design principle.
+
+---
+
 ## What it is
 
 Every log record is a note. Every search asks *"which of the last N notes match this tenant, this time window, these tags, this keyword?"*. Most systems answer that by building a giant per-word inverted index. BlockLog skips the index and pays for the scan instead. In incident-response you already know the tenant, the time window, and roughly what you're looking for, so pruning cuts the work by 90%+ before any byte is read.
